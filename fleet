@@ -135,13 +135,17 @@ def merge():
             p = panes[pid]
             rows[(host, pid)] = dict(host=host, src="hook", state=st["state"],
                                      ts=st["ts"], agent=st["agent"], **p)
-        # rule 1: title-derived rollout fallback, one row max per pane
+        # rule 1: title-derived rollout fallback, one row max per pane.
+        # Agent panes are identified by pane_current_command (titles are task
+        # summaries, not agent names); the ✳ prefix marks waiting — invisible
+        # on tmux >= 3.7 hosts, where hookless panes therefore show working.
+        agents = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
         for pid, p in panes.items():
-            if (host, pid) in rows or "Claude Code" not in p["title"]:
+            if (host, pid) in rows or p["cmd"] not in agents:
                 continue
             state = "waiting" if p["title"].startswith("✳") else "working"
             rows[(host, pid)] = dict(host=host, src="title", state=state,
-                                     ts=0, agent="claude", **p)
+                                     ts=0, agent=agents[p["cmd"]], **p)
         # rule 2: bell overrides everything
         for key, row in rows.items():
             if key[0] == host and row["bell"]:
