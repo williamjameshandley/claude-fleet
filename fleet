@@ -44,8 +44,12 @@ POLL_SH = (
     '&& echo "@@PANES_OK"; '
     'echo "@@CLIENTS"; for f in "${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/clients/"*; do '
     '[ -f "$f" ] || continue; tty=$(cat "$f"); '
-    'printf "%s %s %s\\n" "$(basename "$f")" "$tty" '
-    '"$(tmux display -p -c "$tty" "#{pane_id} #{q:session_name}" 2>/dev/null)"; done'
+    # a client's view = its session's active pane: -c only routes message
+    # output, so the session must be found via list-clients first
+    'sess=$(tmux list-clients -F "#{client_tty} #{q:client_session}" 2>/dev/null '
+    '| awk -v t="$tty" "\\$1==t{print \\$2}"); [ -n "$sess" ] || continue; '
+    'printf "%s %s %s %s\\n" "$(basename "$f")" "$tty" '
+    '"$(tmux display -p -t "$sess" "#{pane_id}" 2>/dev/null)" "$sess"; done'
 )
 
 
@@ -245,16 +249,25 @@ def client_tty(screen, host=LOCAL):
     return tty
 
 
+def client_view(host, tty):
+    """(session, active pane) a tmux client is showing. display -c only
+    routes message output, so the client's session comes from list-clients
+    and the pane from that session's active-pane context."""
+    out = tmux(host, "list-clients", "-F", "#{client_tty} #{q:session_name}")
+    for line in out.splitlines():
+        t, _, sess = line.partition(" ")
+        if t == tty:
+            pid = tmux(host, "display", "-p", "-t", sess, "#{pane_id}").strip()
+            return sess, pid
+    sys.exit(f"fleet: registered client {tty} is not attached on {host}")
+
+
 def displayed_pane(screen):
     """The (host, pane_id, session) this screen is actually showing, live."""
-    tty = client_tty(screen)
-    out = tmux(LOCAL, "display", "-p", "-c", tty, "#{pane_id} #{session_name}")
-    pid, _, sess = out.strip().partition(" ")
+    sess, pid = client_view(LOCAL, client_tty(screen))
     if "@" in sess:
         rhost = sess.split("@", 1)[0]
-        rtty = client_tty(screen, rhost)
-        out = tmux(rhost, "display", "-p", "-c", rtty, "#{pane_id} #{session_name}")
-        pid, _, sess = out.strip().partition(" ")
+        sess, pid = client_view(rhost, client_tty(screen, rhost))
         return rhost, pid, sess
     return LOCAL, pid, sess
 
@@ -361,8 +374,221 @@ def cmd_list(args):
               f" {mark} {r['host']} {r['cwd']}")
 
 
+def goto_pane(host, pid, screen):
+    """Switch a screen to an arbitrary live pane (not necessarily an agent
+    row — fleet-mode origins and last-targets can be any pane). Queries the
+    pane's current location live rather than trusting a frozen snapshot."""
+    fmt = "#{session_name} #{window_index} #{pane_index}"
+    r = run(["tmux", "display", "-p", "-t", pid, fmt]
+            if host == LOCAL else
+            ["ssh", host, f"tmux display -p -t {shlex.quote(pid)} {shlex.quote(fmt)}"])
+    if r.returncode != 0 or not r.stdout.strip():
+        return False
+    sess, win, idx = r.stdout.split()
+    remember_last(screen)
+    tty = client_tty(screen)
+    if host == LOCAL:
+        tmux(LOCAL, "switch-client", "-c", tty, "-t", sess)
+        tmux(LOCAL, "select-window", "-t", f"{sess}:{win}")
+        tmux(LOCAL, "select-pane", "-t", pid)
+    else:
+        bridge = ensure_bridge(host, screen)
+        tmux(LOCAL, "switch-client", "-c", tty, "-t", bridge)
+        rtty = client_tty(screen, host)
+        tmux(host, "switch-client", "-c", rtty, "-t", sess)
+        tmux(host, "select-window", "-t", f"{sess}:{win}")
+        tmux(host, "select-pane", "-t", pid)
+    print(f"→ {sess}:{win}.{idx} {host}")
+    return True
+
+
+def cmd_last(args):
+    screen = screen_of(args)
+    f = CACHE / "last" / screen
+    if not f.exists():
+        sys.exit(f"fleet: no last target recorded for screen {screen}")
+    host, _, pid = f.read_text().strip().partition(":")
+    if not goto_pane(host, pid, screen):
+        sys.exit(f"fleet: last target {host}:{pid} no longer exists")
+
+
+# ---------- fleet mode (Tier 1 stepping) ----------
+#
+# fleet is a one-shot CLI, so the mode lives in a per-screen file between
+# invocations: frozen traversal rings + the origin pane. The gear key is
+# captured by i3 (it never reaches the tmux key-table), so `mode` toggles.
+# Every path here sets the client's key-table explicitly, keeping table
+# state and mode file from diverging.
+
+def mode_file(screen):
+    return CACHE / "modes" / f"{screen}.json"
+
+
+def set_table(screen, table):
+    tmux(LOCAL, "switch-client", "-c", client_tty(screen), "-T", table)
+
+
+def cmd_mode(args):
+    screen = screen_of(args)
+    if mode_file(screen).exists():
+        return cmd_exit(args)
+    snap = need_snapshot()
+    keys = lambda rows: [f"{r['host']}:{r['pane_id']}" for r in rows]
+    actionable = keys([r for r in snap["rows"] if r["state"] != "working"])
+    ring = actionable or keys(snap["rows"])
+    host, pid, _ = displayed_pane(screen)
+    origin = f"{host}:{pid}"
+    write_atomic(mode_file(screen),
+                 json.dumps(dict(origin=origin, actionable=ring, all=keys(snap["rows"]))))
+    # land on the top of the ring immediately: gear alone reaches the top
+    # waiting session; Esc still returns to origin
+    if origin not in ring and ring:
+        step_to(screen, ring[0])
+    # arm the table last: switch-client resets a client's key table, so any
+    # earlier arming would be undone by the landing jump
+    set_table(screen, "fleet")
+
+
+def step_to(screen, key):
+    host, _, pid = key.partition(":")
+    return goto_pane(host, pid, screen)
+
+
+def cmd_step(args):
+    screen = screen_of(args)
+    f = mode_file(screen)
+    if not f.exists():
+        sys.exit(f"fleet: screen {screen} is not in fleet mode")
+    mode = json.loads(f.read_text())
+    ring = mode["all"] if args.ring == "all" else mode["actionable"]
+    if not ring:
+        sys.exit("fleet: ring is empty")
+    host, pid, _ = displayed_pane(screen)
+    here = f"{host}:{pid}"
+    idx = ring.index(here) if here in ring else -1
+    step = 1 if args.dir == "next" else -1
+    for hop in range(1, len(ring) + 1):  # panes may have died since the snapshot froze
+        if step_to(screen, ring[(idx + step * hop) % len(ring)]):
+            return
+    sys.exit("fleet: no pane in the frozen ring still exists")
+
+
+def cmd_exit(args):
+    screen = screen_of(args)
+    mode_file(screen).unlink(missing_ok=True)
+    set_table(screen, "root")
+
+
+def cmd_abort(args):
+    screen = screen_of(args)
+    f = mode_file(screen)
+    if f.exists():
+        origin = json.loads(f.read_text())["origin"]
+        if not step_to(screen, origin):
+            print(f"fleet: origin pane {origin} is gone; staying put", file=sys.stderr)
+        f.unlink(missing_ok=True)
+    set_table(screen, "root")
+
+
+# ---------- spoken commands (Tier 2 caller: wake-word listener; also shell) ----------
+
+WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve "
+    "thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split())}
+WORDS.update({w: 20 + 10 * i for i, w in enumerate(
+    ["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"])})
+
+
+def spoken_number(words):
+    """A number only if EVERY word is numeric — 'the one dealing with X' must
+    not read as 1."""
+    total, seen = 0, False
+    for w in words:
+        w = w.strip(",.").lower()
+        if w.isdigit():
+            total, seen = total + int(w), True
+        elif w in WORDS:
+            total, seen = total + WORDS[w], True
+        else:
+            return None
+    return total if seen else None
+
+
+def llm_resolve(utterance, snap):
+    import urllib.request
+    base = "http://127.0.0.1:30000/v1"
+    model = json.load(urllib.request.urlopen(f"{base}/models"))["data"][0]["id"]
+    rows = [dict(num=r["num"], session=r["session"], state=r["state"],
+                 host=r["host"], dir=Path(r["cwd"]).name) for r in snap["rows"]]
+    prompt = (
+        "You resolve a spoken command against a list of terminal agent sessions. "
+        "Reply with STRICT JSON only: "
+        '{"action": "switch|scroll_up|scroll_down|next|none", "target": <num or null>} '
+        "— optionally \"screen\": \"<name>\" ONLY if the utterance names a screen. "
+        "Prefer needs-action/waiting sessions when the reference is ambiguous. "
+        f"Sessions: {json.dumps(rows)}\nUtterance: {utterance!r}")
+    req = urllib.request.Request(
+        f"{base}/chat/completions",
+        json.dumps(dict(model=model, messages=[dict(role="user", content=prompt)])).encode(),
+        {"Content-Type": "application/json"})
+    text = json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"]
+    return json.loads(text[text.index("{"):text.rindex("}") + 1])
+
+
 def cmd_say(args):
-    sys.exit("fleet: say arrives in Phase 2")
+    if not args.utterance:
+        sys.exit("fleet: nothing to say")
+    words = args.utterance.split()
+    screen = screen_of(args)
+    snap = need_snapshot()
+    m = re.match(r"on screen (\S+),? *(.*)", args.utterance, re.I)
+    if m:
+        spoken = m.group(1).strip(",.").lower()
+        screen = str(WORDS.get(spoken, spoken))
+        args.utterance, words = m.group(2), m.group(2).split()
+        args.screen, args.client = screen, None
+        screen = screen_of(args)
+    u = args.utterance.lower().strip(" .")
+    if re.fullmatch(r"(next|next waiting)", u):
+        return cmd_next(args)
+    if re.fullmatch(r"(press |hit )?enter( on .*)?|submit", u):
+        sys.exit("fleet: spoken submit is disabled until the wake-word dry-run "
+                 "chooses its form (plan Phase 3c)")
+    m = re.fullmatch(r"scroll (up|down)( on (.+))?", u)
+    if m:
+        args.dir, args.target = m.group(1), None
+        if m.group(3):
+            n = spoken_number(m.group(3).split())
+            args.target = str(n) if n is not None else m.group(3)
+        return cmd_scroll(args)
+    m = re.fullmatch(r"rename (\S+) to (.+)", u)
+    if m:
+        n = spoken_number([m.group(1)])
+        args.target = str(n) if n is not None else m.group(1)
+        args.name = "-".join(m.group(2).split())
+        return cmd_rename(args)
+    m = re.fullmatch(r"(?:switch to |go to )?(?:session |the )?(.+?)(?: one)?", u)
+    if m:
+        n = spoken_number(m.group(1).split())
+        if n is not None and any(r["num"] == n for r in snap["rows"]):
+            args.target = str(n)
+            return cmd_switch(args)
+        if any(r["session"] == m.group(1) for r in snap["rows"]):
+            args.target = m.group(1)
+            return cmd_switch(args)
+    verdict = llm_resolve(args.utterance, snap)
+    action = verdict.get("action")
+    if verdict.get("screen"):
+        args.screen, args.client = str(verdict["screen"]), None
+    if action == "switch" and verdict.get("target") is not None:
+        args.target = str(verdict["target"])
+        return cmd_switch(args)
+    if action == "next":
+        return cmd_next(args)
+    if action in ("scroll_up", "scroll_down"):
+        args.dir, args.target = action.split("_")[1], None
+        return cmd_scroll(args)
+    sys.exit(f"fleet: could not resolve {args.utterance!r} (LLM said {verdict})")
 
 
 def need_snapshot():
@@ -480,6 +706,12 @@ def main():
     add("list", cmd_list)
     add("pick", cmd_pick)
     add("preview", cmd_preview, (["target"], dict()))
+    add("last", cmd_last)
+    add("mode", cmd_mode)
+    add("step", cmd_step, (["dir"], dict(choices=["next", "prev"])),
+        (["ring"], dict(nargs="?", default="actionable", choices=["actionable", "all"])))
+    add("exit", cmd_exit)
+    add("abort", cmd_abort)
     add("say", cmd_say, (["utterance"], dict(nargs="?")))
     args = p.parse_args()
     args.fn(args)
