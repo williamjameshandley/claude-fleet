@@ -226,6 +226,8 @@ def screen_of(args):
     if args.client:
         for f in (CACHE / "clients").glob("*"):
             if f.read_text().strip() == args.client:
+                if not NAME_RE.match(f.name):
+                    sys.exit(f"fleet: registered screen {f.name!r} violates [A-Za-z0-9_-]+")
                 return f.name
         sys.exit(f"fleet: client {args.client} is not a registered screen")
     # screen names become filenames, shell-command fragments, and tmux
