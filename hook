@@ -1,0 +1,34 @@
+#!/bin/sh
+# claude-fleet state hook. Invoked by agent lifecycle events (Claude Code
+# hooks; Codex once its hooks fire) with the event JSON on stdin. Records
+# this session's state as one JSON file for the fleet panel to merge.
+#
+# usage: hook <agent>
+set -eu
+dir="${XDG_STATE_HOME:-$HOME/.local/state}/claude-fleet"
+mkdir -p "$dir"
+in=$(cat)
+sid=$(printf '%s' "$in" | jq -r .session_id)
+ev=$(printf '%s' "$in" | jq -r .hook_event_name)
+case "$ev" in
+    SessionStart|UserPromptSubmit)  state=working ;;
+    Stop)                           state=waiting ;;
+    Notification|PermissionRequest) state=needs-action ;;
+    SessionEnd)                     rm -f "$dir/$sid.json"; exit 0 ;;
+    *)                              exit 0 ;;
+esac
+pane=""
+pane_id=""
+if [ -n "${TMUX_PANE:-}" ]; then
+    pane=$(tmux display -p -t "$TMUX_PANE" '#S:#I.#P')
+    pane_id="$TMUX_PANE"
+fi
+# host is informational: the panel stamps rows with the hosts-file ssh alias
+# used for the poll, which is the canonical key.
+printf '%s' "$in" | jq \
+    --arg agent "$1" --arg host "$(hostname)" \
+    --arg pane "$pane" --arg pane_id "$pane_id" --arg state "$state" \
+    '{session_id, agent: $agent, host: $host, pane: $pane,
+      pane_id: $pane_id, cwd, state: $state, ts: now|floor}' \
+    > "$dir/.$sid.$$"
+mv "$dir/.$sid.$$" "$dir/$sid.json"

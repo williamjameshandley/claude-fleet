@@ -1,0 +1,472 @@
+#!/usr/bin/python3
+"""Fleet: awareness and switching for terminal AI-agent sessions in tmux.
+
+State arrives from agent lifecycle hooks (see `hook`) as one JSON file per
+session on each agent host. A single writer panel polls every host over ssh,
+merges hook state with the live tmux pane inventory, allocates stable numbers,
+and publishes the snapshot that every other subcommand (and read-only panel)
+resolves against. Display actions target explicitly registered tmux clients
+("screens"), never a guessed one.
+"""
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "claude-fleet"
+CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "claude-fleet"
+HOSTS_FILE = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "claude-fleet/hosts"
+LOCAL = os.uname().nodename.split(".")[0]
+CADENCE = 2  # seconds; human-glance latency, and the panel's one timing constant
+# Tab-separated pane fields: only pane_title could plausibly contain a tab,
+# so it goes last and every parse uses maxsplit.
+SEP = "\t"
+PANE_FMT = SEP.join(["#{session_name}", "#{window_index}", "#{pane_index}",
+                     "#{pane_id}", "#{window_bell_flag}",
+                     "#{pane_current_command}", "#{pane_current_path}",
+                     "#{pane_title}"])
+AGENT_CMDS = {"claude": "claude"}  # codex joins when its hooks demonstrably fire
+GROUPS = ["needs-action", "waiting", "working"]
+NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+POLL_SH = (
+    'cat "${XDG_STATE_HOME:-$HOME/.local/state}/claude-fleet"/*.json 2>/dev/null; '
+    'echo "@@PANES"; tmux list-panes -a -F ' + shlex.quote(PANE_FMT) + ' 2>/dev/null; '
+    'echo "@@CLIENTS"; for f in "${XDG_CACHE_HOME:-$HOME/.cache}/claude-fleet/clients/"*; do '
+    '[ -f "$f" ] || continue; tty=$(cat "$f"); '
+    'printf "%s\\t%s\\t%s\\n" "$(basename "$f")" "$tty" '
+    '"$(tmux display -p -c "$tty" "#{pane_id} #{session_name}" 2>/dev/null)"; done'
+)
+
+
+def run(argv, **kw):
+    return subprocess.run(argv, text=True, capture_output=True, **kw)
+
+
+def sh(host, script):
+    """Run a shell snippet locally or on a remote agent host."""
+    argv = ["ssh", host, script] if host != LOCAL else ["sh", "-c", script]
+    return run(argv)
+
+
+def tmux(host, *args):
+    argv = ["tmux", *args]
+    if host != LOCAL:
+        argv = ["ssh", host, "tmux " + " ".join(shlex.quote(a) for a in args)]
+    r = run(argv)
+    if r.returncode != 0:
+        sys.exit(f"fleet: tmux {' '.join(args)} on {host}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def hosts():
+    remote = HOSTS_FILE.read_text().split() if HOSTS_FILE.exists() else []
+    return [LOCAL] + remote
+
+
+def decode_states(blob):
+    dec, states, i = json.JSONDecoder(), [], 0
+    blob = blob.strip()
+    while i < len(blob):
+        obj, j = dec.raw_decode(blob, i)
+        states.append(obj)
+        i = j
+        while i < len(blob) and blob[i] in " \n\t":
+            i += 1
+    return states
+
+
+def poll(host):
+    """One host's hook states, pane inventory, and screen registrations."""
+    r = sh(host, POLL_SH)
+    if r.returncode != 0 and "@@PANES" not in r.stdout:
+        return None  # host unreachable
+    state_blob, rest = r.stdout.split("@@PANES\n", 1)
+    pane_blob, client_blob = rest.split("@@CLIENTS\n", 1)
+    panes = {}
+    for line in pane_blob.splitlines():
+        sess, win, idx, pid, bell, cmd, cwd, title = line.split(SEP, 7)
+        if "@" in sess:  # fleet-created bridge/shadow sessions are not rows
+            continue
+        panes[pid] = dict(session=sess, window=win, index=idx, pane_id=pid,
+                          bell=bell == "1", cmd=cmd, cwd=cwd, title=title)
+    displayed = {}
+    for line in client_blob.splitlines():
+        screen, tty, disp = (line.split(SEP, 2) + ["", ""])[:3]
+        if disp:
+            pid, _, dsess = disp.partition(" ")
+            displayed[screen] = dict(tty=tty, pane_id=pid, session=dsess, host=host)
+    return dict(states=decode_states(state_blob), panes=panes, displayed=displayed)
+
+
+def merge():
+    """Apply the merge rules across all hosts; return rows + displayed map."""
+    rows, displayed, unreachable = {}, {}, []
+    for host in hosts():
+        got = poll(host)
+        if got is None:
+            unreachable.append(host)
+            continue
+        panes = got["panes"]
+        # rule 4: newest state per pane wins; rule 3: dead/agentless panes go
+        best, doomed = {}, []
+        for st in got["states"]:
+            pid = st.get("pane_id", "")
+            pane = panes.get(pid)
+            if not pane or pane["cmd"] != AGENT_CMDS.get(st["agent"]):
+                doomed.append(st["session_id"])
+                continue
+            if pid not in best or st["ts"] > best[pid]["ts"]:
+                if pid in best:
+                    doomed.append(best[pid]["session_id"])
+                best[pid] = st
+            else:
+                doomed.append(st["session_id"])
+        if doomed:
+            sh(host, 'cd "${XDG_STATE_HOME:-$HOME/.local/state}/claude-fleet" && rm -f '
+               + " ".join(f"{sid}.json" for sid in doomed))
+        for pid, st in best.items():
+            p = panes[pid]
+            rows[(host, pid)] = dict(host=host, src="hook", state=st["state"],
+                                     ts=st["ts"], agent=st["agent"], **p)
+        # rule 1: title-derived rollout fallback, one row max per pane
+        for pid, p in panes.items():
+            if (host, pid) in rows or "Claude Code" not in p["title"]:
+                continue
+            state = "waiting" if p["title"].startswith("✳") else "working"
+            rows[(host, pid)] = dict(host=host, src="title", state=state,
+                                     ts=0, agent="claude", **p)
+        # rule 2: bell overrides everything
+        for key, row in rows.items():
+            if key[0] == host and row["bell"]:
+                row["state"] = "needs-action"
+        for screen, d in got["displayed"].items():
+            displayed.setdefault(screen, {})[host] = d
+    order = {g: i for i, g in enumerate(GROUPS)}
+    ordered = sorted(rows.values(),
+                     key=lambda r: (order[r["state"]],
+                                    -r["ts"] if r["state"] != "working" else r["ts"]))
+    return ordered, displayed, unreachable
+
+
+def allocate(rows):
+    nfile = CACHE / "numbers.json"
+    nums = json.loads(nfile.read_text()) if nfile.exists() else {}
+    keys = {f"{r['host']}:{r['pane_id']}" for r in rows}
+    nums = {k: v for k, v in nums.items() if k in keys}
+    used = set(nums.values())
+    for r in rows:
+        k = f"{r['host']}:{r['pane_id']}"
+        if k not in nums:
+            n = 1
+            while n in used:
+                n += 1
+            nums[k] = n
+            used.add(n)
+        r["num"] = nums[k]
+    write_atomic(nfile, json.dumps(nums))
+    return rows
+
+
+def write_atomic(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def snapshot_write():
+    rows, displayed, unreachable = merge()
+    rows = allocate(rows)
+    # resolve each screen's logical displayed pane: the local client's view,
+    # followed through a bridge session (host@screen) to the remote client
+    logical = {}
+    for screen, per_host in displayed.items():
+        local = per_host.get(LOCAL)
+        if not local:
+            continue
+        if "@" in local["session"]:
+            rhost = local["session"].split("@", 1)[0]
+            remote = per_host.get(rhost)
+            logical[screen] = remote or local
+        else:
+            logical[screen] = local
+    snap = dict(snapshot_ts=int(time.time()), rows=rows,
+                displayed=logical, unreachable=unreachable)
+    write_atomic(CACHE / "state.json", json.dumps(snap))
+    return snap
+
+
+def snapshot_read():
+    f = CACHE / "state.json"
+    if not f.exists():
+        return None
+    return json.loads(f.read_text())
+
+
+# ---------- screens and clients ----------
+
+def screen_of(args):
+    if args.client:
+        for f in (CACHE / "clients").glob("*"):
+            if f.read_text().strip() == args.client:
+                return f.name
+        sys.exit(f"fleet: client {args.client} is not a registered screen")
+    return args.screen
+
+
+def client_tty(screen, host=LOCAL):
+    r = sh(host, f'cat "${{XDG_CACHE_HOME:-$HOME/.cache}}/claude-fleet/clients/{screen}" 2>/dev/null')
+    tty = r.stdout.strip()
+    if not tty:
+        sys.exit(f"fleet: no registered client for screen {screen} on {host}")
+    return tty
+
+
+def displayed_pane(screen):
+    """The (host, pane_id, session) this screen is actually showing, live."""
+    tty = client_tty(screen)
+    out = tmux(LOCAL, "display", "-p", "-c", tty, "#{pane_id} #{session_name}")
+    pid, _, sess = out.strip().partition(" ")
+    if "@" in sess:
+        rhost = sess.split("@", 1)[0]
+        rtty = client_tty(screen, rhost)
+        out = tmux(rhost, "display", "-p", "-c", rtty, "#{pane_id} #{session_name}")
+        pid, _, sess = out.strip().partition(" ")
+        return rhost, pid, sess
+    return LOCAL, pid, sess
+
+
+def remember_last(screen):
+    host, pid, _ = displayed_pane(screen)
+    write_atomic(CACHE / "last" / screen, f"{host}:{pid}")
+
+
+# ---------- actions ----------
+
+def resolve(snap, target):
+    rows = snap["rows"]
+    if target.isdigit():
+        matches = [r for r in rows if r["num"] == int(target)]
+    else:
+        matches = [r for r in rows if r["session"] == target]
+    if not matches:
+        sys.exit(f"fleet: no session matches {target!r}")
+    return matches[0]  # rows are priority-ordered: needs-action, waiting first
+
+
+def ensure_bridge(rhost, screen):
+    bridge = f"{rhost}@{screen}"
+    if run(["tmux", "has-session", "-t", f"={bridge}"]).returncode != 0:
+        attach = (f"ssh -t {rhost} 'mkdir -p ~/.cache/claude-fleet/clients "
+                  f"&& tty > ~/.cache/claude-fleet/clients/{screen} "
+                  f"&& exec tmux -u new -A -s main'")
+        tmux(LOCAL, "new-session", "-d", "-s", bridge, attach)
+        tmux(LOCAL, "set-option", "-w", "-t", f"{bridge}:0", "remain-on-exit", "on")
+    elif tmux(LOCAL, "display", "-p", "-t", f"{bridge}:0.0", "#{pane_dead}").strip() == "1":
+        tmux(LOCAL, "respawn-pane", "-k", "-t", f"{bridge}:0.0")
+    # the bridge's inner registration appears once its ssh+tmux handshake is
+    # done; bounded startup wait, loud failure (not a hidden steady-state timeout)
+    for _ in range(40):
+        r = sh(rhost, f'cat "$HOME/.cache/claude-fleet/clients/{screen}" 2>/dev/null')
+        if r.stdout.strip():
+            return bridge
+        time.sleep(0.25)
+    sys.exit(f"fleet: bridge {bridge} came up but never registered its client")
+
+
+def do_switch(row, screen):
+    remember_last(screen)
+    tty = client_tty(screen)
+    host, sess = row["host"], row["session"]
+    if host == LOCAL:
+        tmux(LOCAL, "switch-client", "-c", tty, "-t", sess)
+        tmux(LOCAL, "select-window", "-t", f"{sess}:{row['window']}")
+        tmux(LOCAL, "select-pane", "-t", row["pane_id"])
+    else:
+        bridge = ensure_bridge(host, screen)
+        tmux(LOCAL, "switch-client", "-c", tty, "-t", bridge)
+        rtty = client_tty(screen, host)
+        tmux(host, "switch-client", "-c", rtty, "-t", sess)
+        tmux(host, "select-window", "-t", f"{sess}:{row['window']}")
+        tmux(host, "select-pane", "-t", row["pane_id"])
+    print(f"→ {row['num']} {sess}:{row['window']} {host}")
+
+
+def target_pane(snap, args):
+    if args.target:
+        row = resolve(snap, args.target)
+        return row["host"], row["pane_id"]
+    host, pid, _ = displayed_pane(screen_of(args))
+    return host, pid
+
+
+def cmd_switch(args):
+    do_switch(resolve(need_snapshot(), args.target), screen_of(args))
+
+
+def cmd_next(args):
+    snap = need_snapshot()
+    rows = [r for r in snap["rows"] if r["state"] in ("needs-action", "waiting")]
+    if not rows:
+        sys.exit("fleet: nothing is waiting")
+    do_switch(rows[0], screen_of(args))
+
+
+def cmd_enter(args):
+    host, pid = target_pane(need_snapshot(), args)
+    tmux(host, "send-keys", "-t", pid, "Enter")
+    print(f"enter → {host}:{pid}")
+
+
+def cmd_scroll(args):
+    host, pid = target_pane(need_snapshot(), args)
+    tmux(host, "copy-mode", "-e", "-t", pid)
+    tmux(host, "send-keys", "-X", "-t", pid, f"halfpage-{'up' if args.dir == 'up' else 'down'}")
+
+
+def cmd_rename(args):
+    if not NAME_RE.match(args.name):
+        sys.exit("fleet: session names are [A-Za-z0-9_-]+ (`@` is the fleet-session marker)")
+    row = resolve(need_snapshot(), args.target)
+    tmux(row["host"], "rename-session", "-t", row["session"], args.name)
+
+
+def cmd_list(args):
+    for r in need_snapshot()["rows"]:
+        mark = "t" if r["src"] == "title" else " "
+        print(f"{r['num']:>3} {r['state']:<12} {r['session']}:{r['window']}.{r['index']}"
+              f" {mark} {r['host']} {r['cwd']}")
+
+
+def cmd_say(args):
+    sys.exit("fleet: say arrives in Phase 2")
+
+
+def need_snapshot():
+    snap = snapshot_read()
+    if snap is None:
+        sys.exit("fleet: no snapshot — is a writer panel running?")
+    return snap
+
+
+# ---------- pick ----------
+
+def cmd_pick(args):
+    snap = need_snapshot()
+    branches = {}
+    for host in {r["host"] for r in snap["rows"]}:
+        dirs = sorted({r["cwd"] for r in snap["rows"] if r["host"] == host})
+        script = "; ".join(
+            f'printf "%s\\x1f%s\\n" {d!r} "$(git -C {d!r} rev-parse --abbrev-ref HEAD 2>/dev/null)"'
+            for d in dirs)
+        for line in sh(host, script).stdout.splitlines():
+            d, _, b = line.partition(SEP)
+            branches[(host, d)] = b
+    lines = []
+    for r in snap["rows"]:
+        where = Path(r["cwd"]).name
+        b = branches.get((r["host"], r["cwd"]), "")
+        if b:
+            where += f":{b}"
+        lines.append(f"{r['num']}\t{r['state']:<12}\t{r['session']}:{r['window']}.{r['index']}"
+                     f"\t{r['host']}\t{where}")
+    fzf = run(["fzf", "--ansi", "--no-sort",
+               "--preview", "fleet preview {1}", "--preview-window", "right:50%",
+               "--header", "fleet (enter to switch)"], input="\n".join(lines))
+    if fzf.stdout.strip():
+        args.target = fzf.stdout.split("\t")[0].strip()
+        cmd_switch(args)
+
+
+def cmd_preview(args):
+    snap = need_snapshot()
+    row = resolve(snap, args.target)
+    out = tmux(row["host"], "capture-pane", "-p", "-t", row["pane_id"])
+    print("\n".join(out.splitlines()[-40:]))
+
+
+# ---------- panel ----------
+
+COLOR = {"needs-action": "\033[1;31m", "waiting": "\033[33m", "working": "\033[32m"}
+LABEL = {"needs-action": "ACTION", "waiting": "WAITING", "working": "WORKING"}
+
+
+def render(snap, screen, width=28):
+    out = ["\033[H\033[2J"]
+    if (CACHE / "modes" / f"{screen}.json").exists():
+        out.append(f"\033[1;35m-- FLEET --\033[0m j/k step  l last  i exit")
+    age = int(time.time()) - snap["snapshot_ts"]
+    if age > CADENCE:
+        out.append(f"\033[2mage {age}s\033[0m")
+    for host in snap["unreachable"]:
+        out.append(f"\033[1;31m{host} unreachable\033[0m")
+    cur = snap["displayed"].get(screen, {})
+    cur_key = (cur.get("host"), cur.get("pane_id"))
+    group = None
+    for r in snap["rows"]:
+        if r["state"] != group:
+            group = r["state"]
+            bar = "━" * (width - len(LABEL[group]) - 3)
+            out.append(f"{COLOR[group]}━ {LABEL[group]} {bar}\033[0m")
+        name = f"{r['session']}:{r['window']}"[:15]
+        mark = "\033[2mt\033[0m" if r["src"] == "title" else " "
+        line = f"{r['num']:>3} {name:<15}{mark}{r['host'][:8]:>8}"
+        if (r["host"], r["pane_id"]) == cur_key:
+            line = f"\033[7m{line}\033[0m"
+        out.append(line)
+    print("\n".join(out), flush=True)
+
+
+def cmd_panel(args):
+    while True:
+        if args.write:
+            snap = snapshot_write()
+        else:
+            snap = snapshot_read()
+            if snap is None:
+                print("\033[H\033[2J\033[1;31mno writer panel\033[0m", flush=True)
+                time.sleep(CADENCE)
+                continue
+        render(snap, args.screen)
+        time.sleep(CADENCE)
+
+
+# ---------- cli ----------
+
+def main():
+    import argparse
+    p = argparse.ArgumentParser(prog="fleet")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def add(name, fn, *spec):
+        sp = sub.add_parser(name)
+        sp.set_defaults(fn=fn)
+        sp.add_argument("--screen", default="main")
+        sp.add_argument("--client")
+        for names, kw in spec:
+            sp.add_argument(*names, **kw)
+        return sp
+
+    add("panel", cmd_panel, ((["--write"], dict(action="store_true")),))
+    add("switch", cmd_switch, (((["target"]), dict()),))
+    add("next", cmd_next)
+    add("enter", cmd_enter, ((["target"], dict(nargs="?")),))
+    add("scroll", cmd_scroll, ((["dir"], dict(choices=["up", "down"])),
+                               (["target"], dict(nargs="?")),))
+    add("rename", cmd_rename, ((["target"], dict()), (["name"], dict()),))
+    add("list", cmd_list)
+    add("pick", cmd_pick)
+    add("preview", cmd_preview, ((["target"], dict()),))
+    add("say", cmd_say, ((["utterance"], dict(nargs="?")),))
+    args = p.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()
