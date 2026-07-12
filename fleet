@@ -581,14 +581,15 @@ def cmd_say(args):
         args.target = str(n) if n is not None else m.group(1)
         args.name = "-".join(m.group(2).split())
         return cmd_rename(args)
-    m = re.fullmatch(r"(?:switch to |go to )?(?:session |the )?(.+?)(?: one)?", u)
+    m = re.fullmatch(r"(?:switch to |go to )?(?:session |the )?(.+)", u)
     if m:
-        n = spoken_number(m.group(1).split())
+        n = spoken_number(m.group(1).split())  # whole tail first: "twenty one"
         if n is not None and any(r["num"] == n for r in snap["rows"]):
             args.target = str(n)
             return cmd_switch(args)
-        if any(r["session"] == m.group(1) for r in snap["rows"]):
-            args.target = m.group(1)
+        name = re.sub(r" one$", "", m.group(1))  # "the mddb one" -> mddb
+        if any(r["session"] == name for r in snap["rows"]):
+            args.target = name
             return cmd_switch(args)
     verdict = llm_resolve(args.utterance, snap)
     if verdict.get("screen"):
