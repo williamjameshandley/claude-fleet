@@ -183,34 +183,8 @@ def merge():
         if (URGENCY[p["state"]], -p["ts"]) < (URGENCY[g["state"]], -g["ts"]):
             g.update(state=p["state"], ts=p["ts"], cwd=p["cwd"])
     ordered = sorted(rows.values(),
-                     key=lambda r: (URGENCY[r["state"]],
-                                    -r["ts"] if r["state"] != "working" else r["ts"]))
+                     key=lambda r: (URGENCY[r["state"]], -r["ts"]))
     return ordered, unreachable
-
-
-def allocate(rows, unreachable):
-    """Pennant numbers: host:window_id keys, lowest free on first sighting,
-    dropped with the window. The number IS the fleet window index, so it
-    is stable between glances — the ring is never reordered. An unreachable
-    host's numbers are preserved (its fleet windows are left alone too):
-    a failed poll is host-unusable, never "all rows died"."""
-    nfile = CACHE / "numbers.json"
-    nums = json.loads(nfile.read_text()) if nfile.exists() else {}
-    keys = {f"{r['host']}:{r['win']}" for r in rows}
-    nums = {k: v for k, v in nums.items()
-            if k in keys or k.split(":", 1)[0] in unreachable}
-    used = set(nums.values())
-    for r in rows:
-        k = f"{r['host']}:{r['win']}"
-        if k not in nums:
-            n = 1
-            while n in used:
-                n += 1
-            nums[k] = n
-            used.add(n)
-        r["num"] = nums[k]
-    write_atomic(nfile, json.dumps(nums))
-    return rows
 
 
 def shadow(win):
@@ -218,12 +192,16 @@ def shadow(win):
 
 
 def reconcile(rows, unreachable):
-    """Make fleet@main's windows mirror the manifest: one window per row at
-    its pennant index — linked for flagship rows, an ssh client onto a
-    ship-side shadow for remote rows — with @fleet_* options restamped.
-    Poll-cadence work, off every keypress path; nothing reorders windows,
-    ever. Windows of unreachable hosts are left alone (a failed poll is
-    host-unusable, never "all rows died")."""
+    """Make fleet@main's windows mirror the manifest: one window per row —
+    linked for flagship rows, an ssh client onto a ship-side shadow for
+    remote rows — with @fleet_* options restamped. Window order IS the
+    muster order: pennant number = window index = position in the
+    (urgency, newest-change) sort, recomputed at cadence, meaningful only
+    as currently displayed. Reordering pauses while any client holds the
+    conn key-table (the ring never shifts under fingers). Poll-cadence
+    work, off every keypress path. Windows of unreachable hosts are never
+    killed (a failed poll is host-unusable, never "all rows died"); they
+    sink below the live rows, visibly stale."""
     fs = "fleet@main"
     have = {}
     # host aliases and window ids are grammar-safe words, so space-separated
@@ -245,16 +223,16 @@ def reconcile(rows, unreachable):
                      f"both claim {parts[1]}:{parts[2]}")
         have[key] = dict(idx=parts[0], src=parts[3] if len(parts) > 3 else "")
     want = {(r["host"], r["win"]): r for r in rows}
-    # a row's window must sit at its pennant index, and a remote shadow must
-    # still group the session it was built onto — anything else is drift:
-    # kill and recreate at cadence, visible as churn, never a wrong view
+    # a remote shadow must still group the session it was built onto —
+    # dead rows and migrated shadows are drift: kill and recreate at
+    # cadence, visible as churn, never a wrong view
     doomed_shadows = {}
     for (host, win), w in list(have.items()):
         r = want.get((host, win))
         # local rows carry no build record; remote rows must carry theirs
         src_ok = r is not None and (w["src"] == "" if r["host"] == flagship()
                                     else w["src"] == r["session"])
-        if r is not None and w["idx"] == str(r["num"]) and src_ok:
+        if src_ok:
             continue
         if host in unreachable:
             continue  # a failed poll is host-unusable, never "all rows died"
@@ -269,6 +247,39 @@ def reconcile(rows, unreachable):
         if sh(host, "; ".join(f"tmux kill-session -t {shlex.quote('=' + n)}"
                               for n in names)).returncode:
             sys.exit(f"fleet: shadow cleanup on {host} failed")
+    # pennant assignment: live rows take positions 1..N in the sort;
+    # windows surviving an unreachable poll sink below them, visibly
+    # stale. While the conn is armed the layout freezes — present rows
+    # hold their index, new rows append — so the ring never shifts under
+    # fingers.
+    frozen = "fleet" in tmux(flagship(), "list-clients", "-F",
+                             "#{client_key_table}").split()
+    n = 0
+    if frozen:
+        n = max((int(w["idx"]) for w in have.values()), default=0)
+        for r in rows:
+            w = have.get((r["host"], r["win"]))
+            r["num"] = int(w["idx"]) if w else (n := n + 1)
+    else:
+        order = {}
+        for r in rows:
+            n += 1
+            order[(r["host"], r["win"])] = r["num"] = n
+        for k in sorted(set(have) - set(want), key=lambda k: int(have[k]["idx"])):
+            n += 1
+            order[k] = n
+        # two-phase: mismatched windows step aside, then land — one batched
+        # invocation, so indices never collide mid-shuffle
+        moves, land = [], []
+        for k, num in order.items():
+            w = have.get(k)
+            if w and int(w["idx"]) != num:
+                moves += ["move-window", "-s", f"{fs}:{w['idx']}",
+                          "-t", f"{fs}:{1000 + num}", ";"]
+                land += ["move-window", "-s", f"{fs}:{1000 + num}",
+                         "-t", f"{fs}:{num}", ";"]
+        if moves:
+            tmux(flagship(), *(moves + land)[:-1])
     for (host, win), r in want.items():
         if (host, win) in have:
             continue
@@ -304,8 +315,7 @@ def reconcile(rows, unreachable):
 
 def snapshot_write():
     rows, unreachable = merge()
-    rows = allocate(rows, unreachable)
-    reconcile(rows, unreachable)
+    reconcile(rows, unreachable)  # assigns pennant numbers = window indices
     snap = dict(snapshot_ts=int(time.time()), rows=rows, unreachable=unreachable)
     write_atomic(CACHE / "state.json", json.dumps(snap))
     return snap
@@ -420,6 +430,10 @@ def cmd_up(args):
         escaped = MUSTER_CHOOSE.replace("\\", "\\\\").replace('"', '\\"')
         tmux(flagship(), "set-hook", "-t", "fleet@muster", "pane-mode-changed",
              f'if -F "#{{==:#{{pane_in_mode}},0}}" "{escaped}"')
+        # every selection in the fleet re-invokes the chooser: the marker
+        # tracks stepping at keypress speed, event-truth, no polling
+        tmux(flagship(), "set-hook", "-t", fs, "after-select-window",
+             MUSTER_CHOOSE)
     if not any(line.startswith("0 ") for line in
                tmux(flagship(), "list-windows", "-t", f"={fs}",
                     "-F", "#{window_index} ").splitlines()):

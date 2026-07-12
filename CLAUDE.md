@@ -39,12 +39,15 @@ function does more than glue, find the tool that already does it.
 ## State and truth
 
 - Flat files, no daemon, no DB, no message bus, no sockets. One **writer**
-  publishes the snapshot (`state.json`, `numbers.json`) and reconciles the
-  fleet session against it; everything else reads one or the other. Rows
-  and numbers are agent-window-level (`host:window_id`, the immutable id);
-  the pennant number IS the fleet window index — stable, gapped, never
-  reordered. Hook state stays pane-level; panes group into their window's
-  row by urgency (a working sibling never masks a waiting pane).
+  publishes the snapshot (`state.json`) and reconciles the fleet session
+  against it; everything else reads one or the other. Rows are
+  agent-window-level (`host:window_id`, the immutable id); the pennant
+  number IS the fleet window index — position in the (urgency,
+  newest-change) order, recomputed at cadence, meaningful only as
+  currently displayed. Reordering pauses while the conn is armed: the
+  ring never shifts under fingers. Hook state stays pane-level; panes
+  group into their window's row by urgency (a working sibling never
+  masks a waiting pane).
 - Hook state is event truth; panes without it render with a visible `t`
   marker — fallback must be *seen*, never silently absorbed. Bells override.
   Delete state only after a *successful* pane inventory (a failed poll is
