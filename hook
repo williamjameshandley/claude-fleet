@@ -6,8 +6,9 @@ set -eu
 dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"
 mkdir -p "$dir"
 in=$(cat)
-sid=$(printf '%s' "$in" | jq -r .session_id)
-ev=$(printf '%s' "$in" | jq -r .hook_event_name)
+# // empty: a missing/null field must fail validation, not become "null"
+sid=$(printf '%s' "$in" | jq -r '.session_id // empty')
+ev=$(printf '%s' "$in" | jq -r '.hook_event_name // empty')
 case "$sid" in
     *[!A-Za-z0-9-]*|'') echo "hook: unusable session_id: $sid" >&2; exit 1 ;;
 esac

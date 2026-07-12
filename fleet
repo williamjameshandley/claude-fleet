@@ -75,6 +75,8 @@ def tmux(host, *args):
     r = run(argv)
     if r.returncode != 0:
         sys.exit(f"fleet: tmux {' '.join(args)} on {host}: {r.stderr.strip()}")
+    if r.stderr:  # no stderr suppression anywhere, success included
+        print(r.stderr, end="", file=sys.stderr)
     return r.stdout
 
 
@@ -140,9 +142,12 @@ def merge():
         # rule 4: newest state per pane wins; rule 3: dead/agentless panes go
         best, doomed = {}, []
         for st in got["states"]:
-            if st["agent"] not in AGENT_CMDS:  # parsed enum: crash on drift
+            if st["agent"] not in AGENT_CMDS:  # parsed enums: crash on drift
                 sys.exit(f"fleet: state {st['session_id']} on {host} names "
                          f"unknown agent {st['agent']!r}")
+            if st["state"] not in URGENCY:
+                sys.exit(f"fleet: state {st['session_id']} on {host} has "
+                         f"unknown state {st['state']!r}")
             pid = st["pane_id"]  # a state file without pane_id is drift: crash
             pane = panes.get(pid)
             if not pane or pane["cmd"] != AGENT_CMDS[st["agent"]]:
@@ -194,14 +199,17 @@ def merge():
     return ordered, unreachable
 
 
-def allocate(rows):
+def allocate(rows, unreachable):
     """Pennant numbers: host:window_id keys, lowest free on first sighting,
     dropped with the window. The number IS the fleet window index, so it
-    is stable between glances — the ring is never reordered."""
+    is stable between glances — the ring is never reordered. An unreachable
+    host's numbers are preserved (its fleet windows are left alone too):
+    a failed poll is host-unusable, never "all rows died"."""
     nfile = CACHE / "numbers.json"
     nums = json.loads(nfile.read_text()) if nfile.exists() else {}
     keys = {f"{r['host']}:{r['win']}" for r in rows}
-    nums = {k: v for k, v in nums.items() if k in keys}
+    nums = {k: v for k, v in nums.items()
+            if k in keys or k.split(":", 1)[0] in unreachable}
     used = set(nums.values())
     for r in rows:
         k = f"{r['host']}:{r['win']}"
@@ -254,7 +262,10 @@ def reconcile(rows, unreachable):
     doomed_shadows = {}
     for (host, win), w in list(have.items()):
         r = want.get((host, win))
-        if r is not None and w["idx"] == str(r["num"]) and w["src"] in ("", r["session"]):
+        # local rows carry no build record; remote rows must carry theirs
+        src_ok = r is not None and (w["src"] == "" if r["host"] == flagship()
+                                    else w["src"] == r["session"])
+        if r is not None and w["idx"] == str(r["num"]) and src_ok:
             continue
         if host in unreachable:
             continue  # a failed poll is host-unusable, never "all rows died"
@@ -294,7 +305,7 @@ def reconcile(rows, unreachable):
 
 def snapshot_write():
     rows, unreachable = merge()
-    rows = allocate(rows)
+    rows = allocate(rows, unreachable)
     reconcile(rows, unreachable)
     snap = dict(snapshot_ts=int(time.time()), rows=rows, unreachable=unreachable)
     write_atomic(CACHE / "state.json", json.dumps(snap))
@@ -497,7 +508,10 @@ def llm_resolve(utterance, snap):
         sys.exit(f"fleet: could not resolve {utterance!r} by rule, and no LLM "
                  f"endpoint is configured ({cfg})")
     base = cfg.read_text().strip()
-    model = json.load(urllib.request.urlopen(f"{base}/models"))["data"][0]["id"]
+    try:
+        model = json.load(urllib.request.urlopen(f"{base}/models"))["data"][0]["id"]
+    except OSError as e:  # the LLM boundary translates failures, loudly
+        sys.exit(f"fleet: LLM endpoint {base} unreachable: {e}")
     rows = [dict(num=r["num"], session=r["session"], state=r["state"],
                  host=r["host"], dir=Path(r["cwd"]).name) for r in snap["rows"]]
     prompt = (
@@ -511,7 +525,10 @@ def llm_resolve(utterance, snap):
         f"{base}/chat/completions",
         json.dumps(dict(model=model, messages=[dict(role="user", content=prompt)])).encode(),
         {"Content-Type": "application/json"})
-    text = json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"]
+    try:
+        text = json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"]
+    except OSError as e:
+        sys.exit(f"fleet: LLM call failed: {e}")
     return json.loads(text[text.index("{"):text.rindex("}") + 1])
 
 
