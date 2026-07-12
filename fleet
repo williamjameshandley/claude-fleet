@@ -34,9 +34,11 @@ URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
             "#{window_bell_flag} #{q:pane_current_command} "
             "#{q:pane_current_path} #{q:pane_title}")
+# jq slurps the state files into one array (jq owns JSON parsing); the
+# explicit else keeps a jq failure loud instead of masked by a fallback
 POLL_SH = (
-    'for f in "${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"/*.json; do '
-    '[ -e "$f" ] || continue; cat "$f"; done; '
+    'set -- "${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"/*.json; '
+    'if [ -e "$1" ]; then jq -s . "$@"; else echo []; fi; '
     'echo @@PANES; tmux list-panes -a -F ' + shlex.quote(PANE_FMT) + ' && echo @@PANES_OK'
 )
 
@@ -94,18 +96,6 @@ def check_screen(screen):
 
 # ---------- the manifest (single writer) ----------
 
-def decode_states(blob):
-    dec, states, i = json.JSONDecoder(), [], 0
-    blob = blob.strip()
-    while i < len(blob):
-        obj, j = dec.raw_decode(blob, i)
-        states.append(obj)
-        i = j
-        while i < len(blob) and blob[i] in " \n\t":
-            i += 1
-    return states
-
-
 def poll(host):
     """One host's hook states and pane inventory.
     Returns None when there is no trustworthy pane inventory."""
@@ -122,7 +112,7 @@ def poll(host):
             continue
         panes[pid] = dict(session=sess, win=win, window=widx, pane_id=pid,
                           bell=bell == "1", cmd=cmd, cwd=cwd, title=title)
-    return dict(states=decode_states(state_blob), panes=panes)
+    return dict(states=json.loads(state_blob), panes=panes)
 
 
 def merge():
