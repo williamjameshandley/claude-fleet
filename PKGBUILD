@@ -1,16 +1,22 @@
 # Maintainer: Will Handley <wh260@cam.ac.uk>
 pkgname=claude-fleet
-pkgver=0.1.0.r7.gfde7969
+pkgver=0.1.0.r10.g6716313.dirty
 pkgrel=1
 pkgdesc='Awareness panel and one-keypress switching for terminal AI-agent sessions in tmux'
 arch=('any')
 url='https://github.com/williamjameshandley/claude-fleet'
 license=('MIT')
-depends=(python tmux jq fzf openssh)
+# Satellites (agent hosts) only run the hook: jq + tmux. Everything else is
+# hub- or mic-side and optional there.
+depends=(tmux jq)
 optdepends=(
-    'python-openwakeword: wake-dryrun harness'
-    'python-sounddevice: wake-dryrun harness'
-    'python-numpy: wake-dryrun harness'
+    'python: fleet itself (the hub)'
+    'fzf: fleet pick (the hub)'
+    'openssh: hub polling and remote views'
+    'procps-ng: watch drives the panel pane (the hub)'
+    'python-openwakeword: wake-dryrun harness (mic machine)'
+    'python-sounddevice: wake-dryrun harness (mic machine)'
+    'python-numpy: wake-dryrun harness (mic machine)'
 )
 # Contents are read directly from $startdir (see alan-home for the pattern:
 # empty source=() is the lean answer; the install lines are the explicit map
