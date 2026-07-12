@@ -234,12 +234,14 @@ def reconcile(rows, unreachable):
             sys.exit(f"fleet: shadow cleanup on {host} failed")
     frozen = "fleet" in tmux(flagship(), "list-clients", "-F",
                              "#{client_key_table}").split()
-    n = 0
+    n, stale_num = 0, {}
     if frozen:
         n = max((int(w["idx"]) for w in have.values()), default=0)
         for r in rows:
             w = have.get((r["host"], r["win"]))
             r["num"] = int(w["idx"]) if w else (n := n + 1)
+        for k in set(have) - set(want):
+            stale_num[k] = int(have[k]["idx"])
     else:
         order = {}
         for r in rows:
@@ -247,7 +249,7 @@ def reconcile(rows, unreachable):
             order[(r["host"], r["win"])] = r["num"] = n
         for k in sorted(set(have) - set(want), key=lambda k: int(have[k]["idx"])):
             n += 1
-            order[k] = n
+            order[k] = stale_num[k] = n
         # two-phase: step aside then land, so indices never collide
         moves, land = [], []
         for k, num in order.items():
@@ -287,9 +289,10 @@ def reconcile(rows, unreachable):
                              t="t" if r["t"] else "", stale="").items():
             stamps += ["set-option", "-w", "-t", f"{fs}:{r['num']}",
                        f"@fleet_{opt}", val, ";"]
-    for k in set(have) - set(want):
-        stamps += ["set-option", "-w", "-t", f"{fs}:{have[k]['idx']}",
-                   "@fleet_stale", "1", ";"]
+    for k, num in stale_num.items():
+        stamps += ["set-option", "-w", "-t", f"{fs}:{num}", "@fleet_stale", "1",
+                   ";", "set-option", "-w", "-t", f"{fs}:{num}",
+                   "@fleet_num", str(num), ";"]
     if stamps:
         tmux(flagship(), *stamps[:-1])
 
@@ -361,7 +364,6 @@ def cmd_muster(args):
 
 # ---------- fleet up (build the fleet session; owns no rows) ----------
 
-# the muster column: a client held permanently in choose-tree by hooks
 MUSTER_FMT = ("#{?#{@fleet_stale},#[dim]#{@fleet_num} #{@fleet_name} "
               "#{@fleet_host} unreachable#[default],"
               "#{?#{@fleet_state},"
@@ -408,13 +410,11 @@ def cmd_up(args):
         park = ('run-shell -C \'send-keys -t "=fleet@muster:0" '
                 '-N #{@fleet_park} Down\'')
         tmux(flagship(), "set-option", "-t", "fleet@muster", "@fleet_park", "1")
+        # mode close reopens the chooser; mode open parks the cursor
         tmux(flagship(), "set-hook", "-t", "fleet@muster", "pane-mode-changed",
-             f'if -F "#{{==:#{{pane_in_mode}},0}}" "{esc(MUSTER_CHOOSE)}" ; '
-             f'if -F "#{{==:#{{pane_in_mode}},1}}" "{esc(park)}"')
-        # selection stores the park count and closes the chooser; the
-        # pane-mode-changed hook reopens it and parks on the open event —
-        # reopen and park share one queue, so there is no ordering race.
-        # the list is [session header, window 0, ...], hence index + 1
+             f'if -F "#{{==:#{{pane_in_mode}},0}}" "{esc(MUSTER_CHOOSE)}" '
+             f'"{esc(park)}"')
+        # the chooser list is [session header, window 0, ...]: park = index+1
         tmux(flagship(), "set-hook", "-t", fs, "after-select-window",
              'run-shell -C \'set-option -t fleet@muster @fleet_park '
              '#{e|+:#{window_index},1}\' ; '
