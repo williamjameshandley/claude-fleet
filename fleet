@@ -266,7 +266,7 @@ def reconcile(rows, unreachable):
         ident = ["set-option", "-w", "-t", f"{fs}:{r['num']}", "@fleet_host", host,
                  ";", "set-option", "-w", "-t", f"{fs}:{r['num']}", "@fleet_win", win]
         if host == flagship():
-            tmux(flagship(), "link-window", "-s", win, "-t", f"={fs}:{r['num']}",
+            tmux(flagship(), "link-window", "-d", "-s", win, "-t", f"={fs}:{r['num']}",
                  ";", *ident)
         else:
             # sh, not the login shell: zsh =word expansion eats exact targets
