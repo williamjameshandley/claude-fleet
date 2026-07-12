@@ -9,12 +9,17 @@ change; a patch that violates one is wrong even if it works.
 - **Never build an interface.** No TUI loops, no curses, no screen drawing,
   no window choreography. fleet *prints text* and *invokes tmux*; everything
   the user sees is a tmux pane, client, popup, or mode. The screen is owned
-  by `watch` (panel refresh), `fzf` (picking), and tmux itself (layout,
-  key-tables, copy-mode). If a change needs fleet to redraw something,
-  the design is wrong.
-- **The view is the thing itself.** The frame's view pane holds a real
-  nested tmux client attached to the real session — never a preview,
-  capture, or re-render.
+  by `watch` (muster refresh), `choose-tree` (picking), and tmux itself
+  (layout, key-tables, copy-mode). If a change needs fleet to redraw
+  something, the design is wrong.
+- **tmux is the fleet.** The fleet@main session's windows ARE the agent
+  sessions; window order is the ring; every motion is a native tmux
+  command. External code never sits in a keypress path — the poller merely
+  keeps windows created, labelled, and stamped (`@fleet_*` options are the
+  state bus tmux formats render).
+- **The view is the thing itself.** A fleet window is the real window
+  (linked, flagship rows) or holds a real nested tmux client attached to
+  the real session (ship rows) — never a preview, capture, or re-render.
 - Modality is tmux's: the conn is a key-table (`bind -T fleet`), the same
   machinery as copy-mode. Multi-screen is multi-client + session groups.
   Persistence is a detached session on an always-on host.
@@ -32,17 +37,21 @@ function does more than glue, find the tool that already does it.
 ## State and truth
 
 - Flat files, no daemon, no DB, no message bus, no sockets. One **writer**
-  publishes the snapshot (`state.json`, `numbers.json`); everything else
-  reads it. Numbers are pane-level (`host:pane_id`) and mean only what the
-  panel currently shows.
+  publishes the snapshot (`state.json`, `numbers.json`) and reconciles the
+  fleet session against it; everything else reads one or the other. Rows
+  and numbers are agent-window-level (`host:window_id`, the immutable id);
+  the pennant number IS the fleet window index — stable, gapped, never
+  reordered. Hook state stays pane-level; panes group into their window's
+  row by urgency (a working sibling never masks a waiting pane).
 - Hook state is event truth; panes without it render with a visible `t`
   marker — fallback must be *seen*, never silently absorbed. Bells override.
   Delete state only after a *successful* pane inventory (a failed poll is
   host-unusable, never "all panes died").
 - All fleet hosts (first line: the flagship itself) are the ssh aliases in `~/.config/agent-fleet/hosts` — the alias is
   the canonical key everywhere; `hostname` output is informational.
-- `@` in a tmux session name marks it fleet-created (frames, shadows);
-  user sessions never contain it and such sessions are never listed.
+- `@` in a tmux session name marks it fleet-created (`fleet@<screen>`,
+  ship shadows `fleet@w<N>`); user sessions never contain it and such
+  sessions are never listed.
 
 ## Coding principles
 
@@ -94,7 +103,11 @@ is ledgered.
 The repo history is a museum of API beliefs that died on contact: tmux ≥3.7
 sanitises control chars *and* glyphs in formats (`#{q:}` + shlex, never tab
 separators); `display -c` routes output and does NOT set format context;
-`switch-client` resets a client's key-table; Claude pane titles are task
-summaries (identify agent panes by `pane_current_command`); Codex hook
-config parses but fires nothing (0.144.1). Before relying on any tmux/agent
-behaviour, run it on the installed version and read the log.
+`switch-client` resets a client's key-table; `run-shell` stdout hijacks the
+pane into view mode (why no run-shell may sit in a hot path); alert flags
+are per-winlink (acknowledging in fleet leaves the user's own flag);
+`session_bell_flag` is bugged first-window-only (use per-window flags);
+Claude pane titles are task summaries (identify agent panes by
+`pane_current_command`); Codex hook config parses but fires nothing
+(0.144.1). Before relying on any tmux/agent behaviour, run it on the
+installed version and read the log.

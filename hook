@@ -32,3 +32,11 @@ printf '%s' "$in" | jq \
       pane_id: $pane_id, cwd, state: $state, ts: now|floor}' \
     > "$dir/.$sid.$$"
 mv "$dir/.$sid.$$" "$dir/$sid.json"
+# actionable events ring the pane's bell: the alert flag rides tmux natively
+# (through nested ssh clients too), and visiting the window acknowledges it.
+# stateless per event; re-ringing an already-flagged window is idempotent.
+if [ -n "$pane_id" ]; then
+    case "$state" in
+        waiting|needs-action) printf '\a' > "$(tmux display -p -t "$pane_id" '#{pane_tty}')" ;;
+    esac
+fi

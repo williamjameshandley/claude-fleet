@@ -17,28 +17,34 @@ Three pieces, one package:
 
 - **`/usr/lib/agent-fleet/hook`** — wired into the agent's lifecycle hooks
   on every ship and the flagship; writes one state file per session
-  (working / waiting / needs-action, gone on end).
-- **`/usr/bin/fleet`** — the verbs, all resolved against the manifest:
-  - `fleet muster [--write] [--color] --screen S` — one-shot roll-call
-    print. Exactly one muster runs `--write` (in `@frame-main`'s panel
-    pane, under `watch`): it polls every host in
-    `~/.config/agent-fleet/hosts` (ssh aliases; **first line is the
-    flagship itself**), merges hook state with live pane inventories,
-    allocates pennant numbers, publishes the manifest. `watch` owns the
-    refresh; fleet never loops or draws.
-  - `fleet frame --screen S` — builds/repairs the screen's frame: a tmux
-    session `@frame-S` with the muster pane beside a **view pane holding a
-    real nested tmux client** — the ranger layout where the preview *is*
-    the live session. The frame's prefix is `C-q`, so `C-a` reaches the
-    session you're looking at.
-  - `fleet conn` — Tier-1 stepping mode (a tmux key-table): bare `j/k`
-    walk the waiting sessions live, `n/p` everything, `l` last, `i` stay,
-    `Esc` home.
-  - `fleet switch / next / last / enter / scroll / rename / pick / say` —
-    switching, off-screen approvals, scrollback, the fzf picker, and the
-    spoken-command resolver (rules first, then an LLM at the URL in
-    `~/.config/agent-fleet/llm`, allowlisted; spoken submit stays disabled
-    until the wake-word dry-run data picks its form).
+  (working / waiting / needs-action, gone on end) and rings the pane's
+  bell on actionable events, so attention rides tmux's native alert flags.
+- **`/usr/bin/fleet`** — **tmux is the fleet**: `fleet@main` is a tmux
+  session on the flagship whose windows ARE the agent sessions (linked
+  windows for flagship rows; persistent ssh clients onto ship-side shadow
+  sessions for remote rows), so stepping, jumping, and picking are native
+  tmux commands — nothing external sits in a keypress path. The verbs:
+  - `fleet up --screen S` — create the fleet session (window 0 = the
+    muster roll call under `watch`) and set its options; owns no rows.
+  - `fleet muster [--write] [--color]` — one-shot roll-call print.
+    Exactly one muster runs `--write` (in `fleet@main:0`): it polls every
+    host in `~/.config/agent-fleet/hosts` (ssh aliases; **first line is
+    the flagship itself**), merges hook state with live pane inventories,
+    allocates pennant numbers (= fleet window indices, stable and never
+    reordered), publishes the manifest, and reconciles the fleet
+    session's windows against it. `watch` owns the refresh; fleet never
+    loops or draws.
+  - `fleet conn` — Tier-1 stepping mode (a tmux key-table, armed on the
+    fleet session's clients): bare `j/k` step windows, `n/p` hop
+    unacknowledged alerts, `l` last, digits jump, `Esc` back to origin,
+    any other key exits. Every motion is a native tmux command.
+  - `fleet switch / next / enter / scroll / rename / say` — switching,
+    off-screen approvals, scrollback, and the spoken-command resolver
+    (rules first, then an LLM at the URL in `~/.config/agent-fleet/llm`,
+    allowlisted; spoken submit stays disabled until the wake-word dry-run
+    data picks its form). Picking is `choose-tree` over the fleet
+    session's windows, annotated by the `@fleet_*` options the poller
+    stamps.
 - **`/usr/lib/agent-fleet/wake-dryrun`** (+ user unit) — log-only
   openWakeWord scorer on the mic machine: the empirical gate for
   hands-free operation.

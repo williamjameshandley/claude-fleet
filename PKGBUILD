@@ -10,9 +10,8 @@ license=('MIT')
 depends=(tmux jq)
 optdepends=(
     'python: fleet itself (the flagship)'
-    'openssh: polling and remote view panes (the flagship)'
-    'fzf: fleet pick (the flagship)'
-    'procps-ng: watch drives the muster pane (the flagship)'
+    'openssh: polling and remote shadow windows (the flagship)'
+    'procps-ng: watch drives the muster window (the flagship)'
     'python-openwakeword: wake-dryrun harness (the mic machine)'
     'python-sounddevice: wake-dryrun harness (the mic machine)'
     'python-numpy: wake-dryrun harness (the mic machine)'
