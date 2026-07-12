@@ -1,4 +1,4 @@
-# claude-fleet — project philosophy
+# agent-fleet — project philosophy
 
 Awareness and switching for many terminal AI-agent sessions in tmux, across
 hosts, operable with one hand or none. These rules are binding on every
@@ -39,7 +39,7 @@ function does more than glue, find the tool that already does it.
   marker — fallback must be *seen*, never silently absorbed. Bells override.
   Delete state only after a *successful* pane inventory (a failed poll is
   host-unusable, never "all panes died").
-- Hosts are the ssh aliases in `~/.config/claude-fleet/hosts` — the alias is
+- All fleet hosts (first line: the flagship itself) are the ssh aliases in `~/.config/agent-fleet/hosts` — the alias is
   the canonical key everywhere; `hostname` output is informational.
 - `@` in a tmux session name marks it fleet-created (frames, shadows);
   user sessions never contain it and such sessions are never listed.
@@ -58,7 +58,7 @@ hypothetical drift, you're using it wrong.
   already has the keys.
 - **No migration code.** Pre-alpha. No backwards-compatibility shims, no
   transition logic, no marker files. If old state files break, delete
-  `~/.cache/claude-fleet` and `~/.local/state/claude-fleet` and move on.
+  `~/.cache/agent-fleet` and `~/.local/state/agent-fleet` and move on.
 - **Crash on drift, don't paper over.** When code parses a value (a state,
   an event name, a target, a snapshot field), enumerate the known cases and
   crash on anything else. No `default` branches that silently fall through,
