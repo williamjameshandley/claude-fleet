@@ -3,7 +3,7 @@
 
 The flagship (first line of CONFIG/hosts) commands ships (remaining
 lines). Agent lifecycle hooks write per-session state files; the single
-writer (`muster --write`, run under watch in @frame-main's muster pane)
+writer (`muster --write`, run under watch in frame@main's muster pane)
 merges them with live tmux pane inventories into the manifest that every
 other verb resolves against. All UI is tmux/watch/fzf; fleet prints text
 and invokes tmux.
@@ -60,7 +60,10 @@ def run(argv, **kw):
 
 
 def sh(host, script):
-    argv = ["sh", "-c", script] if host == flagship() else ["ssh", host, script]
+    # remote login shells may be zsh (whose nomatch aborts on empty globs):
+    # scripts are written for sh semantics, so run them under sh everywhere
+    argv = (["sh", "-c", script] if host == flagship()
+            else ["ssh", host, "sh -c " + shlex.quote(script)])
     r = run(argv)
     if r.stderr:
         print(r.stderr, end="", file=sys.stderr)
@@ -269,7 +272,7 @@ def cmd_muster(args):
             out.append(c(COLOR[group], f"━ {LABEL[group]} {bar}"))
         name = f"{r['session']}:{r['window']}"[:15]
         mark = c("\033[2m", "t") if r["src"] == "title" else " "
-        line = f"{r['num']:>3} {name:<15}{mark}{r['host'][:8]:>8}"
+        line = f"{r['num']:>3} {name:<14}{mark} {r['host'][:8]:>8}"
         if (r["host"], r["pane_id"]) == cur_key:
             line = c("\033[7m", line)
         out.append(line)
@@ -280,12 +283,12 @@ def cmd_muster(args):
 
 def screen_of(args):
     if args.client:
-        # (a) outer path: a client attached to some =@frame-<screen>
+        # (a) outer path: a client attached to some =frame@<screen>
         for line in tmux(flagship(), "list-clients", "-F",
                          "#{client_tty} #{q:session_name}").splitlines():
             tty, _, sess = line.partition(" ")
-            if tty == args.client and sess.startswith("@frame-"):
-                return sess.removeprefix("@frame-")
+            if tty == args.client and sess.startswith("frame@"):
+                return sess.removeprefix("frame@")
         # (b) local inner path: the tty of some screen's view pane
         for f in (CACHE / "clients").glob("*"):
             if pane_tty(f.read_text().strip()) == args.client:
@@ -350,13 +353,13 @@ SHIP_ATTACH = ("ssh -t {ship} 'mkdir -p ${{XDG_CACHE_HOME:-$HOME/.cache}}/agent-
 
 def cmd_frame(args):
     screen = screen_of(args)
-    frame = f"@frame-{screen}"
+    frame = f"frame@{screen}"
     if run(["tmux", "has-session", "-t", f"={frame}"]).returncode != 0:
         tmux(flagship(), "new-session", "-d", "-s", frame,
              f"watch -t -c fleet muster --color --screen {screen}"
              + (" --write" if screen == "main" else ""))
-        tmux(flagship(), "set-option", "-t", f"={frame}", "prefix", "C-q")
-        tmux(flagship(), "set-option", "-w", "-t", f"={frame}:0", "remain-on-exit", "on")
+        tmux(flagship(), "set-option", "-t", frame, "prefix", "C-q")  # set-option rejects =exact targets
+        tmux(flagship(), "set-option", "-w", "-t", f"{frame}:0", "remain-on-exit", "on")
         view = tmux(flagship(), "split-window", "-h", "-t", f"={frame}:0", "-l", "78%",
                     "-P", "-F", "#{pane_id}",
                     "TMUX= tmux -u new -A -s main").strip()
@@ -419,14 +422,14 @@ def goto(host, pid, sess, win, screen, snap):
     remember_last(screen)
     # shadow lifecycle: fleet-wide singleton keyed off the live view
     if run(["tmux" if cur_host == flagship() else "ssh", *([] if cur_host == flagship()
-            else [cur_host, "tmux"]), "has-session", "-t", f"=@shadow-{screen}"]).returncode == 0:
-        tmux(cur_host, "kill-session", "-t", f"=@shadow-{screen}")
+            else [cur_host, "tmux"]), "has-session", "-t", f"=shadow@{screen}"]).returncode == 0:
+        tmux(cur_host, "kill-session", "-t", f"=shadow@{screen}")
     if cur_host != host:
         repoint_view(screen, host)
     display = sess
     if other_screen_displays(sess, host, screen, snap):
-        tmux(host, "new-session", "-d", "-t", f"={sess}", "-s", f"@shadow-{screen}")
-        display = f"@shadow-{screen}"
+        tmux(host, "new-session", "-d", "-t", f"={sess}", "-s", f"shadow@{screen}")
+        display = f"shadow@{screen}"
     tty = inner_tty(screen, host)
     tmux(host, "switch-client", "-c", tty, "-t", f"={display}")
     tmux(host, "select-window", "-t", f"={display}:{win}")
@@ -519,9 +522,9 @@ def frame_clients(screen):
     ttys = [line.partition(" ")[0] for line in
             tmux(flagship(), "list-clients", "-F",
                  "#{client_tty} #{q:session_name}").splitlines()
-            if line.partition(" ")[2] == f"@frame-{screen}"]
+            if line.partition(" ")[2] == f"frame@{screen}"]
     if not ttys:
-        sys.exit(f"fleet: no client is attached to @frame-{screen}")
+        sys.exit(f"fleet: no client is attached to frame@{screen}")
     return ttys
 
 
