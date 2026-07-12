@@ -255,9 +255,9 @@ def reconcile(rows, unreachable):
         for k, num in order.items():
             w = have.get(k)
             if w and int(w["idx"]) != num:
-                moves += ["move-window", "-s", f"{fs}:{w['idx']}",
+                moves += ["move-window", "-d", "-s", f"{fs}:{w['idx']}",
                           "-t", f"{fs}:{1000 + num}", ";"]
-                land += ["move-window", "-s", f"{fs}:{1000 + num}",
+                land += ["move-window", "-d", "-s", f"{fs}:{1000 + num}",
                          "-t", f"{fs}:{num}", ";"]
         if moves:
             tmux(flagship(), *(moves + land)[:-1])
@@ -445,9 +445,6 @@ def cmd_conn(args):
         return
     origin = tmux(flagship(), "display", "-p", "-t", f"={fs}:", "#{window_id}").strip()
     tmux(flagship(), "set-option", "-t", fs, "@fleet_origin", origin)
-    r = run(["tmux", "next-window", "-a", "-t", f"={fs}"])  # no alerts -> stay
-    if r.returncode and "no next window" not in r.stderr:  # verified 3.6b wording
-        sys.exit(f"fleet: tmux next-window on {fs}: {r.stderr.strip()}")
     # arm last: switch-client resets a client's key table
     for tty, _ in clients:
         tmux(flagship(), "switch-client", "-c", tty, "-T", "fleet")
