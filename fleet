@@ -308,6 +308,9 @@ def snapshot_write():
     reconcile(rows, unreachable)
     snap = dict(snapshot_ts=int(time.time()), rows=rows, unreachable=unreachable)
     write_atomic(CACHE / "state.json", json.dumps(snap))
+    # wake event-driven musters (selection changes poke the same channel
+    # via the after-select-window hook; signals latch, nothing is lost)
+    tmux(flagship(), "wait-for", "-S", "fleet-muster")
     return snap
 
 
@@ -336,6 +339,15 @@ def cmd_muster(args):
     else:
         snap = need_snapshot()
     c = (lambda code, s: f"{code}{s}\033[0m") if args.color else (lambda code, s: s)
+    # the currently selected fleet window, for the reverse-video mark; an
+    # absent fleet session is a normal pre-up state, not an error
+    cur = ()
+    probe = run(["tmux", "display", "-p", "-t", "=fleet@main:",
+                 "#{q:@fleet_host} #{q:@fleet_win}"])
+    if probe.returncode == 0:
+        cur = tuple(shlex.split(probe.stdout))
+    elif "can't find" not in probe.stderr:
+        print(probe.stderr, end="", file=sys.stderr)
     out = []
     age = int(time.time()) - snap["snapshot_ts"]
     if age > CADENCE:
@@ -351,8 +363,12 @@ def cmd_muster(args):
         name = f"{r['session']}:{r['window']}"
         if r["count"] > 1:
             name += f"×{r['count']}"
-        mark = c("\033[2m", "t") if r["t"] else " "
-        out.append(f"{r['num']:>3} {name[:15]:<15}{mark} {r['host'][:8]:>8}")
+        body = lambda mark: f"{r['num']:>3} {name[:15]:<15}{mark} {r['host'][:8]:>8}"
+        if (r["host"], r["win"]) == cur:  # plain mark inside the bar: an
+            line = c("\033[7m", body("t" if r["t"] else " "))  # inner reset
+        else:                                                  # would cut it
+            line = body(c("\033[2m", "t") if r["t"] else " ")
+        out.append(line)
     print("\n".join(out))
 
 
@@ -378,6 +394,10 @@ def cmd_up(args):
     tmux(flagship(), "set-option", "-t", fs, "status-right",
          "#{?#{==:#{client_key_table},fleet},#[fg=magenta bold]-- CONN -- #[default],}"
          "#[fg=color3]%d %b %R ")
+    # selection changes repaint event-driven musters instantly (verified:
+    # fires for select-window and next-window alike)
+    tmux(flagship(), "set-hook", "-t", fs, "after-select-window",
+         "wait-for -S fleet-muster")
     if not any(line.startswith("0 ") for line in
                tmux(flagship(), "list-windows", "-t", f"={fs}",
                     "-F", "#{window_index} ").splitlines()):
