@@ -1,16 +1,18 @@
 #!/usr/bin/python3
 """agent-fleet: awareness and switching for terminal AI-agent sessions.
 
-tmux is the fleet: fleet@main is a tmux session on the flagship whose
-windows ARE the agent sessions — linked windows for flagship rows,
-persistent ssh clients onto ship-side shadow sessions for remote rows —
-so every motion (stepping, jumping, picking) is a native tmux command
-and no external code sits in a keypress path. Agent lifecycle hooks
-write per-session state files and ring the pane bell; the single writer
-(`muster --write`, run under watch in fleet@main's muster window) merges
-them with live pane inventories into the manifest, reconciles the fleet
-session's windows against it, and stamps @fleet_* window options for
-tmux formats to render. fleet prints text and invokes tmux.
+Agents are peers (claude, codex; more register in AGENT_CMDS and
+agent_state). tmux is the fleet: fleet@main is a tmux session on the
+flagship whose windows ARE the agent sessions — linked windows for
+flagship rows, persistent ssh clients onto ship-side shadow sessions for
+remote rows — so every motion (stepping, jumping, picking) is a native
+tmux command and no external code sits in a keypress path. State is read
+from what each agent already writes (no hook): the single writer
+(`muster --write`, run under watch in fleet@main's muster window) polls
+each host's pane inventory + per-agent state, groups panes into the
+manifest, reconciles the fleet session's windows against it, and stamps
+@fleet_* window options for tmux formats to render. fleet prints text
+and invokes tmux.
 """
 
 import fcntl
@@ -29,19 +31,35 @@ CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "age
 CADENCE = 2  # the human-glance cadence
 MUSTER_ADDR = "127.0.0.1:45871"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-AGENT_CMDS = {"claude": "claude", "codex": "codex"}
+AGENT_CMDS = {"claude": "claude", "codex": "codex"}  # peers; pane_current_command → agent
 URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
 # every string field #{q:}-quoted and shlex-parsed, never tab separators
 # (titles are terminal-set strings); the tmux client sanitises non-ASCII
 # unless it runs under a UTF-8 locale, which non-interactive ssh lacks
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
-            "#{q:pane_current_command} "
+            "#{pane_pid} #{window_activity} #{q:pane_current_command} "
             "#{q:pane_current_path} #{q:pane_title}")
+# codex writes no pane title but keeps its rollout JSONL open: from a codex
+# pane's process tree find the open rollout, its tail gives working/waiting
+# (task_started vs task_complete) and the last agent_message as a summary
+CODEX_STATE = (
+    '[.[]|select(.type=="event_msg")|.payload] as $e '
+    '| ([$e[]|select(.type=="agent_message")|.message]|last // "") as $m '
+    '| ([$e[]|select(.type=="task_started" or .type=="task_complete")]'
+    '|last.type // "task_complete") as $b '
+    '| (if $b=="task_started" then "working" else "waiting" end) '
+    '+ "\\t" + ($m|gsub("\\n";" ")|.[0:80])')
 POLL_SH = (
     'export LANG=C.UTF-8; '
-    'set -- "${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"/*.json; '
-    'if [ -e "$1" ]; then jq -s . "$@"; else echo []; fi; '
-    'echo @@PANES; tmux list-panes -a -F ' + shlex.quote(PANE_FMT) + ' && echo @@PANES_OK'
+    'tmux list-panes -a -F ' + shlex.quote(PANE_FMT) + ' && echo @@PANES_OK; '
+    'echo @@CODEX; '
+    'tmux list-panes -a -F "#{pane_id} #{pane_pid} #{pane_current_command}" '
+    '| while read pid ppid cmd; do [ "$cmd" = codex ] || continue; roll=; '
+    'for p in $ppid $(pgrep -P "$ppid" 2>/dev/null); do '
+    'r=$(ls -l /proc/$p/fd 2>/dev/null | grep -o "/[^ ]*rollout-[^ ]*\\.jsonl" | head -1); '
+    '[ -n "$r" ] && { roll=$r; break; }; done; [ -n "$roll" ] || continue; '
+    'printf "%s\\t%s\\n" "$pid" "$(tail -n 400 "$roll" | jq -rs '
+    + shlex.quote(CODEX_STATE) + ')"; done; echo @@CODEX_OK'
 )
 
 
@@ -277,90 +295,81 @@ def cmd_latest(args):
 # ---------- the manifest (single writer) ----------
 
 def poll(host):
-    """One host's hook states and pane inventory.
-    Returns None when there is no trustworthy pane inventory."""
+    """One host's pane inventory plus the codex rollout states (codex is
+    the one agent whose state isn't already in the inventory's pane title).
+    No hook — state is read from what each agent writes. Returns None with
+    no trustworthy inventory (a failed poll is host-unusable, never "all
+    panes died")."""
     r = sh(host, POLL_SH)
-    if "@@PANES_OK\n" not in r.stdout:
+    if "@@PANES_OK\n" not in r.stdout or "@@CODEX_OK" not in r.stdout:
         return None
-    state_blob, pane_blob = r.stdout.split("@@PANES\n", 1)
+    pane_blob, rest = r.stdout.split("@@PANES_OK\n", 1)
+    codex_blob = rest.split("@@CODEX\n", 1)[1]
     panes = {}
     for line in pane_blob.splitlines():
-        if line == "@@PANES_OK":
-            continue
-        sess, win, widx, pid, cmd, cwd, title = shlex.split(line)
+        sess, win, widx, pid, ppid, act, cmd, cwd, title = shlex.split(line)
         if "@" in sess:  # fleet-created (fleet@*, shadows) are never rows
             continue
         panes[pid] = dict(session=sess, win=win, window=widx, pane_id=pid,
-                          cmd=cmd, cwd=cwd, title=title)
-    return dict(states=json.loads(state_blob), panes=panes)
+                          activity=int(act), cmd=cmd, cwd=cwd, title=title)
+    codex = {}
+    for line in codex_blob.splitlines():
+        if line == "@@CODEX_OK":
+            continue
+        pid, state, summary = (line.split("\t") + ["", ""])[:3]
+        if state not in URGENCY:
+            sys.exit(f"fleet: codex pane {pid} on {host} has unknown state {state!r}")
+        codex[pid] = (state, summary)
+    return dict(panes=panes, codex=codex)
+
+
+def agent_state(agent, pane, got):
+    """Each agent's live state comes from whatever that agent itself writes:
+    claude marks its pane title (✳ waiting, else working); codex writes no
+    title, so its rollout tail is read in the poll. A new agent registers
+    its own reader here — there is no default."""
+    if agent == "claude":
+        return ("waiting" if pane["title"].startswith("✳") else "working"), pane["title"]
+    if agent == "codex":
+        return got["codex"].get(pane["pane_id"], ("working", pane["title"]))
+    sys.exit(f"fleet: no state reader for agent {agent!r}")
 
 
 def merge():
-    """Pane-level rules (per v2), then panes group by host:window_id into
-    rows: urgency wins (a working sibling never masks a waiting pane),
-    the `t` fallback marker propagates, cwd follows the urgent pane
-    (newest ts breaks urgency ties). enter/scroll keep an exact pane_id
-    only when a row holds exactly one agent pane."""
+    """Agent panes group by host:window_id into rows: urgency wins (a
+    working sibling never masks a waiting pane), cwd and title follow the
+    urgent pane. enter/scroll keep an exact pane_id only when a row holds
+    exactly one agent pane."""
     pane_rows, unreachable = {}, []
+    cmd_agent = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
     for host in hosts():
         got = poll(host)
         if got is None:
             unreachable.append(host)
             continue
-        panes = got["panes"]
-        # rule 4: newest state per pane wins; rule 3: dead/agentless panes go
-        best, doomed = {}, []
-        for st in got["states"]:
-            if st["agent"] not in AGENT_CMDS:  # parsed enums: crash on drift
-                sys.exit(f"fleet: state {st['session_id']} on {host} names "
-                         f"unknown agent {st['agent']!r}")
-            if st["state"] not in URGENCY:
-                sys.exit(f"fleet: state {st['session_id']} on {host} has "
-                         f"unknown state {st['state']!r}")
-            pid = st["pane_id"]  # a state file without pane_id is drift: crash
-            pane = panes.get(pid)
-            if not pane or pane["cmd"] != AGENT_CMDS[st["agent"]]:
-                doomed.append(st["session_id"])
-            elif pid not in best or st["ts"] > best[pid]["ts"]:
-                if pid in best:
-                    doomed.append(best[pid]["session_id"])
-                best[pid] = st
-            else:
-                doomed.append(st["session_id"])
-        if doomed and sh(
-                host, 'cd "${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet" && rm -f '
-                + " ".join(shlex.quote(f"{sid}.json") for sid in doomed)).returncode:
-            sys.exit(f"fleet: state cleanup on {host} failed")
-        for pid, st in best.items():
-            pane_rows[(host, pid)] = dict(host=host, src="hook", state=st["state"],
-                                          ts=st["ts"], agent=st["agent"], **panes[pid])
-        # rule 1: no hook state -> visibly title-derived from Claude's own
-        # ✳-when-waiting title prefix
-        agents = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
-        for pid, p in panes.items():
-            if (host, pid) not in pane_rows and p["cmd"] in agents:
-                state = "waiting" if p["title"].startswith("✳") else "working"
-                pane_rows[(host, pid)] = dict(host=host, src="title", state=state,
-                                              ts=0, agent=agents[p["cmd"]], **p)
+        for pid, p in got["panes"].items():
+            agent = cmd_agent.get(p["cmd"])
+            if not agent:
+                continue
+            p["state"], p["title"] = agent_state(agent, p, got)
+            pane_rows[(host, pid)] = dict(p, host=host, agent=agent)
     rows = {}
-    for p in pane_rows.values():
+    for p in sorted(pane_rows.values(), key=lambda p: p["window"]):
         key = (p["host"], p["win"])
         g = rows.get(key)
         if g is None:
             rows[key] = dict(host=p["host"], win=p["win"], session=p["session"],
-                             window=p["window"], state=p["state"], ts=p["ts"],
-                             cwd=p["cwd"], title=p["title"], agent=p["agent"],
-                             t=p["src"] == "title", count=1,
-                             pane_id=p["pane_id"])
+                             window=p["window"], state=p["state"], cwd=p["cwd"],
+                             title=p["title"], agent=p["agent"],
+                             ts=p["activity"], count=1, pane_id=p["pane_id"])
             continue
         g["count"] += 1
-        g["t"] = g["t"] or p["src"] == "title"
+        g["ts"] = max(g["ts"], p["activity"])
         g["pane_id"] = None  # ambiguous target: enter/scroll must refuse
-        if (URGENCY[p["state"]], -p["ts"]) < (URGENCY[g["state"]], -g["ts"]):
-            g.update(state=p["state"], ts=p["ts"], cwd=p["cwd"],
-                     title=p["title"], agent=p["agent"])
-    ordered = sorted(rows.values(),
-                     key=lambda r: (URGENCY[r["state"]], -r["ts"]))
+        if URGENCY[p["state"]] < URGENCY[g["state"]]:
+            g.update(state=p["state"], cwd=p["cwd"], title=p["title"],
+                     agent=p["agent"])
+    ordered = sorted(rows.values(), key=lambda r: (URGENCY[r["state"]], -r["ts"]))
     return ordered, unreachable
 
 
@@ -477,8 +486,7 @@ def reconcile(rows, unreachable):
         for opt, val in dict(host=r["host"], win=r["win"], state=r["state"],
                              num=str(r["num"]), cwd=Path(r["cwd"]).name,
                              name=f"{r['session']}:{r['window']}",
-                             title=r["title"],
-                             t="t" if r["t"] else "", stale="").items():
+                             title=r["title"], stale="").items():
             stamps.append(["set-option", "-w", "-t", f"{fs}:{r['num']}",
                            f"@fleet_{opt}", val])
     for k, num in stale_num.items():
@@ -549,12 +557,8 @@ def cmd_muster(args):
         name = f"{r['session']}:{r['window']}"
         if r["count"] > 1:
             name += f"×{r['count']}"
-        body = lambda mark: f"{r['num']:>3} {name[:15]:<15}{mark} {r['host'][:8]:>8}"
-        if (r["host"], r["win"]) == cur:  # plain mark inside the bar: an
-            line = c("\033[7m", body("t" if r["t"] else " "))  # inner reset
-        else:                                                  # would cut it
-            line = body(c("\033[2m", "t") if r["t"] else " ")
-        out.append(line)
+        body = f"{r['num']:>3} {name[:15]:<15} {r['host'][:8]:>8}"
+        out.append(c("\033[7m", body) if (r["host"], r["win"]) == cur else body)
     print("\n".join(out))
 
 
@@ -572,13 +576,12 @@ def muster_rows(snap):
               else f"{r['session']}:{r['window']}")
              + (f"×{r['count']}" if r["count"] > 1 else "") for r in rows]
     wn = max((len(n) for n in names), default=0)
-    short = {"claude": "cc", "codex": "cx"}
+    short = {"claude": "C", "codex": "X"}
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
         line = (f"{COLOR[r['state']]}{name:<{wn + 2}}\033[0m"
                 f"\033[2m{short[r['agent']]} {r['host'][0].upper()} "
-                f"{Path(r['cwd']).name:<{wc + 1}}"
-                f"{'t ' if r['t'] else '  '}\033[0m{r['title']}")
+                f"{Path(r['cwd']).name:<{wc + 1}}\033[0m{r['title']}")
         out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{line}")
     print("\n".join(out))
 
