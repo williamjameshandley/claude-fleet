@@ -70,6 +70,15 @@ class FleetTests(unittest.TestCase):
             fleet.stamp_rows([row], old, {}, 50)
         self.assertEqual(row["state_changed"], 50)
 
+    def test_remote_rows_attach_directly_without_shadow_sessions(self):
+        row = dict(host="newton", win="@7", session="email-3", num=1)
+        with patch.object(fleet, "flagship", return_value="lovelace"), \
+             patch.object(fleet, "tmux") as tmux:
+            fleet.create_rows([row], {})
+        command = " ".join(str(x) for x in tmux.call_args.args)
+        self.assertIn("attach-session -t =email-3", command)
+        self.assertNotIn("fleet@w", command)
+
     def test_reconcile_restores_each_grouped_sessions_window_identity(self):
         selected = {"fleet@left": "@1", "fleet@right": "@2"}
         with patch.object(fleet, "group_selections", return_value={

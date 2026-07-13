@@ -17,6 +17,7 @@ from pathlib import Path
 
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "agent-fleet"
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+SSH_AGENT_SOCKET = RUNTIME / "gnupg/S.gpg-agent.ssh"
 CADENCE = 2
 USAGE_CADENCE = 300
 MUSTER_SOCKET = RUNTIME / "agent-fleet-muster.sock"
@@ -413,10 +414,6 @@ def merge():
     return ordered, unreachable
 
 
-def shadow(win):
-    return f"fleet@w{win.lstrip('@')}"
-
-
 def fleet_inventory():
     fs = "fleet@main"
     have = {}
@@ -461,7 +458,6 @@ def restore_group_selections(selected):
 
 def remove_missing(have, want, unreachable):
     fs = "fleet@main"
-    doomed_shadows = {}
     for (host, win), w in list(have.items()):
         r = want.get((host, win))
         src_ok = r is not None and (w["src"] == "" if r["host"] == flagship()
@@ -474,13 +470,7 @@ def remove_missing(have, want, unreachable):
             tmux(flagship(), "unlink-window", "-t", f"={fs}:{w['idx']}")
         else:
             tmux(flagship(), "kill-window", "-t", f"={fs}:{w['idx']}")
-            if r is None or w["src"] != r["session"]:
-                doomed_shadows.setdefault(host, []).append(shadow(win))
         del have[(host, win)]
-    for host, names in doomed_shadows.items():
-        if sh(host, "; ".join(f"tmux kill-session -t {shlex.quote('=' + n)}"
-                              for n in names)).returncode:
-            sys.exit(f"fleet: shadow cleanup on {host} failed")
 
 
 def ordering_frozen():
@@ -538,8 +528,8 @@ def create_rows(rows, have):
             tmux(flagship(), "link-window", "-d", "-s", win, "-t", f"={fs}:{r['num']}",
                  ";", *ident)
         else:
-            attach = (f"exec tmux -u new -A -t {shlex.quote('=' + r['session'])} "
-                      f"-s {shlex.quote(shadow(win))} \\; select-window -t {win}")
+            attach = ("exec tmux -u attach-session -t "
+                      + shlex.quote("=" + r["session"]))
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],
                  f"exec ssh -t {shlex.quote(host)} "
@@ -698,6 +688,7 @@ def muster_rows(snap):
 
 
 def cmd_muster_ui(args):
+    os.environ["SSH_AUTH_SOCK"] = str(SSH_AGENT_SOCKET)
     os.execvp("fzf", [
         "fzf", "--listen", str(MUSTER_SOCKET), "--ansi", "--no-input",
         "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
@@ -753,7 +744,8 @@ def cmd_peek(args):
 def cmd_up(args):
     screen = check_screen(args.screen or "main")
     fs = f"fleet@{screen}"
-    watch = "watch -t -c fleet muster --color --write"
+    watch = (f"env SSH_AUTH_SOCK={shlex.quote(str(SSH_AGENT_SOCKET))} "
+             "watch -t -c fleet muster --color --write")
     if absent(flagship(), fs):
         if screen == "main":
             tmux(flagship(), "new-session", "-d", "-s", fs, "-n", "muster", watch)

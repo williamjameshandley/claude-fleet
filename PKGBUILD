@@ -8,7 +8,7 @@ url='https://github.com/williamjameshandley/agent-fleet'
 license=('MIT')
 depends=(python tmux otf-font-awesome)
 optdepends=(
-    'openssh: polling and remote shadow windows (the flagship)'
+    'openssh: polling and remote session views (the flagship)'
     'fzf: the muster column (the flagship)'
     'curl: selection pushes to the muster column (the flagship)'
     'procps-ng: ps maps agent process trees; watch drives the muster window'

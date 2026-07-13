@@ -59,9 +59,8 @@ function does more than glue, find the tool that already does it.
   only a successful inventory can remove vanished panes.
 - All fleet hosts (first line: the flagship itself) are the ssh aliases in `~/.config/agent-fleet/hosts` — the alias is
   the canonical key everywhere; `hostname` output is informational.
-- `@` in a tmux session name marks it fleet-created (`fleet@<screen>`,
-  ship shadows `fleet@w<N>`); user sessions never contain it and such
-  sessions are never listed.
+- `@` in a tmux session name marks a grouped Fleet view (`fleet@<screen>`);
+  user sessions never contain it and such sessions are never listed.
 
 ## Coding principles
 
