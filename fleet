@@ -647,7 +647,7 @@ def muster_rows(snap):
               else f"{r['session']}:{r['window']}")
              + (f"×{r['count']}" if r["count"] > 1 else "") for r in rows]
     wn = max((len(n) for n in names), default=0)
-    short = {"claude": "C", "codex": "X"}
+    short = {"claude": "\ue861", "codex": "\ue7cf"}  # fa-claude / fa-openai brand glyphs
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
         line = (f"{COLOR[r['state']]}{name:<{wn + 2}}\033[0m"
