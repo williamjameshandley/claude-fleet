@@ -528,8 +528,9 @@ def create_rows(rows, have):
             tmux(flagship(), "link-window", "-d", "-s", win, "-t", f"={fs}:{r['num']}",
                  ";", *ident)
         else:
-            attach = ("exec tmux -u attach-session -t "
-                      + shlex.quote("=" + r["session"]))
+            target = shlex.quote("=" + r["session"])
+            attach = (f"exec tmux -u set-option -t {target} status off \\; "
+                      f"attach-session -t {target}")
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],
                  f"exec ssh -t {shlex.quote(host)} "
@@ -552,7 +553,7 @@ def stamp_rows(rows, have, stale_num, now):
                              agent=r["agent"], state=r["state"], state_changed=changed,
                              count=str(r["count"]), ts=str(r["ts"]),
                              num=str(r["num"]), cwd=r["cwd"],
-                             name=f"{r['session']}:{r['window']}",
+                             name=r["session"],
                              title=r["title"], stale="").items():
             stamps.append(["set-option", "-w", "-t", f"{fs}:{r['num']}",
                            f"@fleet_{opt}", val])
@@ -654,7 +655,7 @@ def cmd_muster(args):
     for host in snap["unreachable"]:
         out.append(c("\033[1;31m", f"{host} unreachable"))
     for r in snap["rows"]:
-        name = f"{r['session']}:{r['window']}"
+        name = r["session"]
         if r["count"] > 1:
             name += f"×{r['count']}"
         body = f"{STATE_ICONS[r['state']]} {r['num']:>3} {name[:15]:<15} {HOST_ICONS[r['host']]}"

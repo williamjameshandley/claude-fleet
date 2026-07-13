@@ -76,6 +76,7 @@ class FleetTests(unittest.TestCase):
              patch.object(fleet, "tmux") as tmux:
             fleet.create_rows([row], {})
         command = " ".join(str(x) for x in tmux.call_args.args)
+        self.assertIn("set-option -t =email-3 status off", command)
         self.assertIn("attach-session -t =email-3", command)
         self.assertNotIn("fleet@w", command)
 
