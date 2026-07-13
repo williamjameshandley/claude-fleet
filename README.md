@@ -50,8 +50,7 @@ writes — there is no default agent.
     meaningful only as displayed; reordering pauses while the conn is
     armed — publishes the manifest entirely as tmux options, and reconciles
     the fleet windows. There is no JSON state file in the command path.
-  - `fleet conn` — one-hand stepping mode (a tmux key-table, armed on the
-    fleet session's clients, or by pressing Enter): bare `j/k` step
+  - `fleet conn` — explicit one-hand stepping mode (a tmux key-table): bare `j/k` step
     windows, `n/p` hop unacknowledged alerts, `l` last, digits jump,
     `Esc` back to origin, any other key exits. Every motion is native.
   - `fleet station list/show/clear/swap/focus` — arrange real Fleet windows
@@ -76,8 +75,8 @@ writes — there is no default agent.
   `$XDG_RUNTIME_DIR/agent-fleet-muster.sock`
   (`fleet muster-ui`) fed by `fleet muster --rows`; the poller and
   selection hooks push `reload`/`pos` to its Unix socket, so the
-  cursor tracks stepping at keypress speed. Enter jumps the fleet view
-  and arms the conn; a live `capture-pane` preview shows the row's tail.
+    cursor tracks stepping at keypress speed. Enter jumps the fleet view;
+    a live `capture-pane` preview shows the row's tail.
   Its header shows Claude Code and Codex account-window consumption and
   time to reset. The writer refreshes those every five minutes through
   `fleet-usage`: Claude's account endpoint and codex-proxy's cached quota

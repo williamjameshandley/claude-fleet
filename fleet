@@ -701,8 +701,7 @@ def cmd_muster_ui(args):
         "--bind", "c:execute(fleet create)",
         "--bind", "r:execute(fleet rename {3} \"$(printf 'rename to: ' >&2; "
                    "read -r n </dev/tty && echo \"$n\")\")+reload(fleet muster --rows)",
-        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}' "
-                   "&& fleet conn --screen main --arm)",
+        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}')",
     ])
 
 
