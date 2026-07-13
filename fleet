@@ -103,6 +103,15 @@ def write_atomic(path, text):
     tmp.replace(path)
 
 
+def absent(name):
+    # "can't find" is the verified wording for a missing session; anything
+    # else is a boundary failure
+    r = run(["tmux", "has-session", "-t", f"={name}"])
+    if r.returncode and "can't find" not in r.stderr:
+        sys.exit(f"fleet: tmux has-session {name}: {r.stderr.strip()}")
+    return bool(r.returncode)
+
+
 def check_screen(screen):
     if not NAME_RE.match(screen):
         sys.exit(f"fleet: screen names are [A-Za-z0-9_-]+, got {screen!r}")
@@ -216,7 +225,9 @@ def reconcile(rows, unreachable, prev, muster_idle):
     fs = "fleet@main"
     cur_parts = shlex.split(tmux(
         flagship(), "display", "-p", "-t", f"={fs}:",
-        "#{q:window_id} #{q:@fleet_host} #{q:@fleet_win}")) + ["", ""]
+        "#{q:window_id} #{q:@fleet_host} #{q:@fleet_win}"))
+    if len(cur_parts) not in (1, 3):  # 1 = the unstamped muster window
+        sys.exit(f"fleet: half-stamped current window: {cur_parts!r}")
     have = {}
     # @fleet_src: the remote build record, written once at creation; local rows carry none
     for line in tmux(flagship(), "list-windows", "-t", f"={fs}", "-F",
@@ -326,14 +337,14 @@ def reconcile(rows, unreachable, prev, muster_idle):
         tmux_batched(flagship(), stamps)
     # the viewed row leaving attention for working parks the cursor at the
     # vacated attention slot (only while the muster client is idle)
-    ckey = (cur_parts[1], cur_parts[2])
+    ckey = (cur_parts[1], cur_parts[2]) if len(cur_parts) == 3 else None
     p, w = prev.get(ckey), want.get(ckey)
     if (not frozen and muster_idle and p and w
             and p["state"] != "working" and w["state"] == "working"):
         att = [r for r in rows
                if r["state"] != "working" and (r["host"], r["win"]) != ckey]
         target = next((r for r in att if r["num"] >= p["num"]),
-                      att[-1] if att else (rows[0] if rows else None))
+                      att[-1] if att else None)
         if target:
             tmux(flagship(), "set-option", "-t", "fleet@muster",
                  "@fleet_park", str(target["num"] + 1))
@@ -390,7 +401,7 @@ def cmd_muster(args):
     if probe.returncode == 0:
         cur = tuple(shlex.split(probe.stdout))
     elif "can't find" not in probe.stderr:
-        print(probe.stderr, end="", file=sys.stderr)
+        sys.exit(f"fleet: tmux display fleet@main: {probe.stderr.strip()}")
     out = []
     age = int(time.time()) - snap["snapshot_ts"]
     if age > CADENCE:
@@ -442,11 +453,11 @@ def cmd_up(args):
     screen = check_screen(args.screen)
     fs = f"fleet@{screen}"
     watch = "watch -t -c fleet muster --color --write"
-    if run(["tmux", "has-session", "-t", f"={fs}"]).returncode != 0:
+    if absent(fs):
         if screen == "main":
             tmux(flagship(), "new-session", "-d", "-s", fs, "-n", "muster", watch)
         else:  # grouped screens share fleet@main's windows (and its one writer)
-            if run(["tmux", "has-session", "-t", "=fleet@main"]).returncode != 0:
+            if absent("fleet@main"):
                 sys.exit("fleet: fleet@main is not up — run: fleet up --screen main")
             tmux(flagship(), "new-session", "-d", "-t", "fleet@main", "-s", fs)
     # set-option rejects =exact targets; plain names are safe (@ is fleet's)
@@ -455,7 +466,7 @@ def cmd_up(args):
          "#{?#{==:#{client_key_table},fleet},#[fg=magenta bold]-- CONN -- #[default],}"
          "#[fg=color3]%d %b %R ")
     if screen == "main":  # the muster column, one fleet-wide (see above)
-        if run(["tmux", "has-session", "-t", "=fleet@muster"]).returncode != 0:
+        if absent("fleet@muster"):
             tmux(flagship(), "new-session", "-d", "-s", "fleet@muster",
                  "-n", "muster", "exec sleep infinity")
         tmux(flagship(), "set-option", "-t", "fleet@muster", "status", "off")
@@ -616,7 +627,7 @@ def llm_resolve(utterance, snap):
         "Reply with STRICT JSON only: "
         '{"action": "switch|scroll_up|scroll_down|next|none", "target": <num or null>} '
         "— optionally \"screen\": \"<name>\" ONLY if the utterance names a screen. "
-        "Prefer needs-action/waiting sessions when the reference is ambiguous. "
+        "If the reference is ambiguous, return action none. "
         f"Sessions: {json.dumps(rows)}\nUtterance: {utterance!r}")
     req = urllib.request.Request(
         f"{base}/chat/completions",
@@ -624,7 +635,7 @@ def llm_resolve(utterance, snap):
         {"Content-Type": "application/json"})
     try:
         text = json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"]
-        verdict = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        verdict = json.loads(text)
     except OSError as e:
         sys.exit(f"fleet: LLM call failed: {e}")
     except (KeyError, IndexError, ValueError) as e:  # incl. JSONDecodeError
