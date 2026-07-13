@@ -466,7 +466,8 @@ def cmd_muster_ui(args):
         "--preview-window", "down,50%,border-top",
         "--bind", "start:reload(fleet muster --rows)",
         "--bind", "j:down,k:up,u:first,q:ignore",
-        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}')",
+        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}' "
+                   "&& fleet conn --screen main --arm)",
     ], env)
 
 
@@ -524,6 +525,8 @@ def cmd_conn(args):
     if not clients:
         sys.exit(f"fleet: no client is attached to {fs}")
     if any(table == "fleet" for _, table in clients):  # gear toggles
+        if args.arm:  # already armed is what --arm wants: stay
+            return
         for tty, _ in clients:
             tmux(flagship(), "switch-client", "-c", tty, "-T", "root")
         return
@@ -742,7 +745,7 @@ def main():
     add("muster-ui", cmd_muster_ui)
     add("peek", cmd_peek, (["host"], dict()), (["win"], dict()))
     add("up", cmd_up)
-    add("conn", cmd_conn)
+    add("conn", cmd_conn, (["--arm"], dict(action="store_true")))
     add("switch", cmd_switch, (["target"], dict()))
     add("next", cmd_next)
     add("enter", cmd_enter, (["target"], dict(nargs="?")))
