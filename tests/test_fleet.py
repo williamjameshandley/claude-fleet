@@ -1,5 +1,6 @@
 import importlib.machinery
 import io
+import json
 import subprocess
 import tempfile
 import time
@@ -136,6 +137,18 @@ class FleetTests(unittest.TestCase):
         argv = execvp.call_args.args[1]
         self.assertIn(f"start:reload({Path(fleet.__file__).resolve()} history -n 100)",
                       argv)
+
+    def test_history_sort_handles_equal_timestamps(self):
+        args = type("Args", (), {"n": 2})()
+        items = [{"agent": "claude", "session_id": str(i), "mtime": 1,
+                  "name": f"s{i}", "cwd": "/work"} for i in range(2)]
+        result = subprocess.CompletedProcess([], 0, json.dumps(items), "")
+        with patch.object(fleet, "manifest", return_value={"rows": []}), \
+             patch.object(fleet, "hosts", return_value=["lovelace"]), \
+             patch.object(fleet, "sh", return_value=result), \
+             redirect_stdout(io.StringIO()) as out:
+            fleet.cmd_history(args)
+        self.assertEqual(len(out.getvalue().splitlines()), 2)
 
 
 class TmuxIntegrationTests(unittest.TestCase):

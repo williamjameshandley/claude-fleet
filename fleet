@@ -332,7 +332,8 @@ def cmd_history(args):
             if (host, item["session_id"]) in live:
                 continue
             dormant.append((item["mtime"], host, item))
-    for _, host, item in sorted(dormant, reverse=True)[:args.n]:
+    for _, host, item in sorted(dormant, key=lambda row: row[0],
+                                reverse=True)[:args.n]:
         print("\t".join((host, item["session_id"], item["agent"], item["name"],
                          age(item["mtime"]), item["cwd"])))
 
