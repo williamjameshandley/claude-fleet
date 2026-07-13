@@ -180,15 +180,6 @@ def session_at(agent, path):
     return Session(agent, p.stem[-36:], p, p.stat().st_mtime)
 
 
-def claude_transcript(cwd):
-    """Claude's newest transcript for a working directory — its `last`
-    mtime is the honest recency signal (untouched by tmux window ops).
-    The project dir slugs both `/` and `.` in the cwd to `-`."""
-    d = CLAUDE / (cwd.replace("/", "-").replace(".", "-"))
-    files = list(d.glob("*.jsonl")) if d.exists() else []
-    return max((session_at("claude", f) for f in files),
-               key=lambda s: s.mtime, default=None)
-
 
 def live_state(s):
     """(state, summary) from a codex rollout's turn markers: task_started
@@ -303,19 +294,29 @@ def cmd_latest(args):
 
 # ---------- per-host poll (runs locally on every host; uses the library) ----------
 
-def descendants(pid):
+def child_map():
+    """pid → child pids, from one ps call (per-pane pgrep is too slow on
+    the poll's hot path)."""
+    kids = {}
+    for line in run(["ps", "-eo", "pid=,ppid="]).stdout.splitlines():
+        pid, ppid = (int(x) for x in line.split())
+        kids.setdefault(ppid, []).append(pid)
+    return kids
+
+
+def descendants(pid, kids):
     seen, stack = [], [pid]
     while stack:
-        for k in run(["pgrep", "-P", str(stack.pop())]).stdout.split():
-            seen.append(int(k))
-            stack.append(int(k))
+        for k in kids.get(stack.pop(), []):
+            seen.append(k)
+            stack.append(k)
     return seen
 
 
-def open_transcript(pane_pid, needle):
+def open_transcript(tree, needle):
     """The transcript a pane's process tree holds open (codex keeps its
-    rollout open; claude does not — hence claude is found by cwd instead)."""
-    for p in [pane_pid, *descendants(pane_pid)]:
+    rollout open; claude does not — hence claude's registry gives its id)."""
+    for p in tree:
         try:
             entries = os.listdir(f"/proc/{p}/fd")
         except OSError:
@@ -330,10 +331,36 @@ def open_transcript(pane_pid, needle):
     return None
 
 
+def claude_agents():
+    """Claude's own registry of running sessions, keyed by pid: the
+    authoritative, hook-free source of state + exact session id."""
+    r = run(["claude", "agents", "--json"])
+    if r.returncode:  # older claude without the command: caller falls back
+        return {}
+    return {x["pid"]: x for x in json.loads(r.stdout)}
+
+
+def claude_status(entry):
+    """Registry status → fleet state. `state: blocked` is claude's
+    needs-input (it pairs with needs:"send a prompt" in jobs/state.json);
+    otherwise the running `status` is busy or idle."""
+    if entry.get("state") == "blocked":
+        return "needs-action"
+    status = entry["status"]
+    if status == "busy":
+        return "working"
+    if status == "idle":
+        return "waiting"
+    sys.exit(f"fleet: unknown claude agent status {status!r}")
+
+
 def cmd_poll(args):
     """Print this host's agent panes as JSON, state and recency read from
-    what each agent writes. Run locally or over ssh by the flagship poll."""
+    what each agent exposes about itself. Run locally or over ssh by the
+    flagship poll."""
     cmd_agent = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
+    agents = claude_agents()
+    kids = child_map()
     r = run(["tmux", "list-panes", "-a", "-F", PANE_FMT])
     if r.returncode:
         sys.exit(f"fleet: list-panes: {r.stderr.strip()}")
@@ -343,12 +370,20 @@ def cmd_poll(args):
         agent = cmd_agent.get(cmd)
         if agent is None or "@" in sess:  # non-agent or fleet-created
             continue
+        tree = [int(ppid), *descendants(int(ppid), kids)]
         if agent == "claude":
-            state = "waiting" if title.startswith("✳") else "working"
-            t = claude_transcript(cwd)
-            ts = int(t.mtime) if t else 0
-        elif agent == "codex":  # no pane title; its open rollout carries state
-            roll = open_transcript(int(ppid), "rollout-")
+            entry = next((agents[p] for p in tree if p in agents), None)
+            if entry:  # the registry: authoritative state + exact session id
+                state = claude_status(entry)
+                title = entry.get("name") or title
+                f = CLAUDE / entry["cwd"].replace("/", "-").replace(".", "-") \
+                    / f"{entry['sessionId']}.jsonl"
+                ts = int(f.stat().st_mtime) if f.exists() else 0
+            else:  # not in the registry: fall back to the pane title glyph
+                state = "waiting" if title.startswith("✳") else "working"
+                ts = 0
+        elif agent == "codex":  # no registry/title; its open rollout carries state
+            roll = open_transcript(tree, "rollout-")
             if roll:
                 s = session_at("codex", roll)
                 state, title = live_state(s)
