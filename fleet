@@ -373,9 +373,8 @@ def cmd_poll(args):
         tree = [int(ppid), *descendants(int(ppid), kids)]
         if agent == "claude":
             entry = next((agents[p] for p in tree if p in agents), None)
-            if entry:  # the registry: authoritative state + exact session id
-                state = claude_status(entry)
-                title = entry.get("name") or title
+            if entry:  # the registry: authoritative state + exact session id.
+                state = claude_status(entry)  # title stays the pane's own ✳
                 f = CLAUDE / entry["cwd"].replace("/", "-").replace(".", "-") \
                     / f"{entry['sessionId']}.jsonl"
                 ts = int(f.stat().st_mtime) if f.exists() else 0
