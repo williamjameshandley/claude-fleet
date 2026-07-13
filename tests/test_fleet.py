@@ -70,6 +70,17 @@ class FleetTests(unittest.TestCase):
             fleet.stamp_rows([row], old, {}, 50)
         self.assertEqual(row["state_changed"], 50)
 
+    def test_reconcile_restores_each_grouped_sessions_window_identity(self):
+        selected = {"fleet@left": "@1", "fleet@right": "@2"}
+        with patch.object(fleet, "group_selections", return_value={
+                "fleet@left": "@0", "fleet@right": "@2"}), \
+             patch.object(fleet, "flagship", return_value="flag"), \
+             patch.object(fleet, "tmux", return_value="@0\n@1\n@2\n"), \
+             patch.object(fleet, "tmux_batched") as batched:
+            fleet.restore_group_selections(selected)
+        batched.assert_called_once_with(
+            "flag", [["select-window", "-t", "=fleet@left:@1"]])
+
     def test_spoken_number_requires_every_word_to_be_numeric(self):
         self.assertEqual(fleet.spoken_number(["twenty", "one"]), 21)
         self.assertIsNone(fleet.spoken_number(["the", "one"] ))
@@ -86,6 +97,34 @@ class FleetTests(unittest.TestCase):
 
 
 class TmuxIntegrationTests(unittest.TestCase):
+    def test_reorder_restores_grouped_session_window_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = ["tmux", "-L", "fleet-reorder-test", "-f", "/dev/null"]
+            env = {"TMUX_TMPDIR": tmp}
+            def run(*args):
+                return subprocess.run([*base, *args], env=env, check=True,
+                                      text=True, capture_output=True)
+            run("new-session", "-d", "-s", "fleet@main", "-n", "zero")
+            run("new-window", "-d", "-t", "fleet@main:1", "-n", "one")
+            run("new-window", "-d", "-t", "fleet@main:2", "-n", "two")
+            run("new-session", "-d", "-t", "fleet@main", "-s", "fleet@left")
+            run("select-window", "-t", "fleet@left:1")
+            selected = run("display", "-p", "-t", "fleet@left:",
+                           "#{window_id}").stdout.strip()
+            with patch.object(fleet, "flagship", return_value="flag"), \
+                 patch.object(fleet, "tmux", side_effect=lambda host, *args:
+                              run(*args).stdout):
+                before = fleet.group_selections()
+                run("move-window", "-d", "-s", "fleet@main:1",
+                    "-t", "fleet@main:1001")
+                run("move-window", "-d", "-s", "fleet@main:1001",
+                    "-t", "fleet@main:3")
+                fleet.restore_group_selections(before)
+            restored = run("display", "-p", "-t", "fleet@left:",
+                           "#{window_id}").stdout.strip()
+            self.assertEqual(restored, selected)
+            run("kill-server")
+
     def test_grouped_stations_select_windows_independently(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = ["tmux", "-L", "fleet-test", "-f", "/dev/null"]
