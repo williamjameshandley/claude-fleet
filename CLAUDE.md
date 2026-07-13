@@ -106,9 +106,13 @@ is ledgered.
 
 ## Verify on the machine, not from memory
 
-The repo history is a museum of API beliefs that died on contact: tmux ≥3.7
-sanitises control chars *and* glyphs in formats (`#{q:}` + shlex, never tab
-separators); `display -c` routes output and does NOT set format context;
+The repo history is a museum of API beliefs that died on contact — including
+one false conviction that survived two sessions: "tmux ≥3.7 sanitises glyphs"
+was actually the tmux *client* sanitising non-ASCII because non-interactive
+ssh shells carry no locale (export a UTF-8 LANG in remote scripts; the
+"verification" had pushed the glyph through the same locale-less path it was
+testing). Real facts: `#{q:}` + shlex for formats, never tab separators;
+`display -c` routes output and does NOT set format context;
 `switch-client` resets a client's key-table; `run-shell` stdout hijacks the
 pane into view mode (why no run-shell may sit in a hot path); alert flags
 are per-winlink (acknowledging in fleet leaves the user's own flag);

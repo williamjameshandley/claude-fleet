@@ -29,12 +29,14 @@ CADENCE = 2  # the human-glance cadence
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 AGENT_CMDS = {"claude": "claude"}  # codex joins when its hooks demonstrably fire
 URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
-# every string field #{q:}-quoted: tmux >= 3.7 sanitises control characters
-# in format output, so lines must parse with shlex, never tab separators
+# every string field #{q:}-quoted and shlex-parsed, never tab separators
+# (titles are terminal-set strings); the tmux client sanitises non-ASCII
+# unless it runs under a UTF-8 locale, which non-interactive ssh lacks
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
             "#{q:pane_current_command} "
             "#{q:pane_current_path} #{q:pane_title}")
 POLL_SH = (
+    'export LANG=C.UTF-8; '
     'set -- "${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"/*.json; '
     'if [ -e "$1" ]; then jq -s . "$@"; else echo []; fi; '
     'echo @@PANES; tmux list-panes -a -F ' + shlex.quote(PANE_FMT) + ' && echo @@PANES_OK'
@@ -167,14 +169,12 @@ def merge():
         for pid, st in best.items():
             pane_rows[(host, pid)] = dict(host=host, src="hook", state=st["state"],
                                           ts=st["ts"], agent=st["agent"], **panes[pid])
-        # rule 1: no hook state -> visibly title-derived. tmux >= 3.7 ships
-        # mangle every glyph to _, hiding waiting-✳ vs working-spinner:
-        # default the ambiguity to waiting (a missed waiting costs more)
+        # rule 1: no hook state -> visibly title-derived from Claude's own
+        # ✳-when-waiting title prefix
         agents = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
         for pid, p in panes.items():
             if (host, pid) not in pane_rows and p["cmd"] in agents:
-                state = ("waiting" if p["title"].startswith(("✳", "_"))
-                         else "working")
+                state = "waiting" if p["title"].startswith("✳") else "working"
                 pane_rows[(host, pid)] = dict(host=host, src="title", state=state,
                                               ts=0, agent=agents[p["cmd"]], **p)
     rows = {}
