@@ -462,11 +462,10 @@ def cmd_muster_ui(args):
         "fzf", "--listen", MUSTER_ADDR, "--ansi", "--no-input",
         "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
         "--header-lines", "1", "--info", "hidden", "--no-scrollbar",
-        "--preview", "fleet peek {1} {2}",
+        "--preview", "fleet peek {1} {2} | tail -n $FZF_PREVIEW_LINES",
         "--preview-window", "down,50%,border-top",
         "--bind", "start:reload(fleet muster --rows)",
         "--bind", "j:down,k:up,u:first,q:ignore",
-        "--bind", "right:preview-half-page-down,left:preview-half-page-up",
         "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}')",
     ], env)
 
