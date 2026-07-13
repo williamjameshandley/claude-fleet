@@ -199,7 +199,7 @@ def shadow(win):
     return f"fleet@w{win.lstrip('@')}"
 
 
-def reconcile(rows, unreachable):
+def reconcile(rows, unreachable, prev, muster_idle):
     """Make fleet@main's windows mirror the manifest: one window per row —
     linked for flagship rows, an ssh client onto a ship-side shadow for
     remote rows — with @fleet_* options restamped. Window order IS the
@@ -211,6 +211,9 @@ def reconcile(rows, unreachable):
     killed (a failed poll is host-unusable, never "all rows died"); they
     sink below the live rows, visibly stale."""
     fs = "fleet@main"
+    cur_parts = shlex.split(tmux(
+        flagship(), "display", "-p", "-t", f"={fs}:",
+        "#{q:window_id} #{q:@fleet_host} #{q:@fleet_win}")) + ["", ""]
     have = {}
     # @fleet_src: the remote build record, written once at creation; local rows carry none
     for line in tmux(flagship(), "list-windows", "-t", f"={fs}", "-F",
@@ -270,8 +273,7 @@ def reconcile(rows, unreachable):
         # two-phase: step aside then land, so indices never collide.
         # -d keeps a move from becoming current (man: as link-window),
         # except the viewed window itself, whose landing must select it
-        cur = tmux(flagship(), "display", "-p", "-t", f"={fs}:",
-                   "#{window_id}").strip()
+        cur = cur_parts[0]
         moves, land = [], []
         for k, num in order.items():
             w = have.get(k)
@@ -283,13 +285,6 @@ def reconcile(rows, unreachable):
                              "-t", f"{fs}:{num}"])
         if moves:
             tmux_batched(flagship(), moves + land)
-            # a reorder rebuilds the chooser with the cursor on the top
-            # agent row (the most urgent), not chasing a sunk window
-            tmux(flagship(), "set-option", "-t", "fleet@muster",
-                 "@fleet_park", "2")
-            r = run(["tmux", "send-keys", "-t", "=fleet@muster:0", "q"])
-            if r.returncode and "can't find" not in r.stderr:
-                sys.exit(f"fleet: muster rebuild: {r.stderr.strip()}")
     for (host, win), r in want.items():
         if (host, win) in have:
             continue
@@ -326,11 +321,33 @@ def reconcile(rows, unreachable):
                        "@fleet_num", str(num)])
     if stamps:
         tmux_batched(flagship(), stamps)
+    # the viewed row leaving attention for working parks the cursor at the
+    # vacated attention slot (only while the muster client is idle)
+    ckey = (cur_parts[1], cur_parts[2])
+    p, w = prev.get(ckey), want.get(ckey)
+    if (not frozen and muster_idle and p and w
+            and p["state"] != "working" and w["state"] == "working"):
+        att = [r for r in rows
+               if r["state"] != "working" and (r["host"], r["win"]) != ckey]
+        target = next((r for r in att if r["num"] >= p["num"]),
+                      att[-1] if att else (rows[0] if rows else None))
+        if target:
+            tmux(flagship(), "set-option", "-t", "fleet@muster",
+                 "@fleet_park", str(target["num"] + 1))
+            r = run(["tmux", "send-keys", "-t", "=fleet@muster:0", "q"])
+            if r.returncode and "can't find" not in r.stderr:
+                sys.exit(f"fleet: muster park: {r.stderr.strip()}")
 
 
 def snapshot_write():
     rows, unreachable = merge()
-    reconcile(rows, unreachable)
+    f = CACHE / "state.json"
+    prev = ({(r["host"], r["win"]): r
+             for r in json.loads(f.read_text())["rows"]} if f.exists() else {})
+    acts = run(["tmux", "list-clients", "-t", "=fleet@muster",
+                "-F", "#{client_activity}"]).stdout.split()
+    muster_idle = all(time.time() - int(a) > 3 for a in acts)
+    reconcile(rows, unreachable, prev, muster_idle)
     snap = dict(snapshot_ts=int(time.time()), rows=rows, unreachable=unreachable)
     write_atomic(CACHE / "state.json", json.dumps(snap))
     return snap
