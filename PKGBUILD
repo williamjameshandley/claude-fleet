@@ -1,13 +1,14 @@
 # Maintainer: Will Handley <wh260@cam.ac.uk>
 pkgname=agent-fleet
-pkgver=0.1.0.r49.g1ae89c4.dirty
+pkgver=0.1.0.r50.g614b6d0.dirty
 pkgrel=1
 pkgdesc='Awareness and one-keypress switching for a fleet of terminal AI-agent sessions in tmux'
 arch=('any')
 url='https://github.com/williamjameshandley/agent-fleet'
 license=('MIT')
-# State is read from what each agent writes (Claude's pane title, codex's
-# rollout JSONL) — no hook, nothing to install on ships.
+# State is read from what each agent writes (claude's pane title, codex's
+# rollout JSONL) — no hook. Ships run `fleet _poll`, so fleet installs
+# everywhere, not only the flagship.
 depends=(tmux jq)
 optdepends=(
     'python: fleet itself (the flagship)'

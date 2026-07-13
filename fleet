@@ -649,8 +649,9 @@ def cmd_muster_ui(args):
 
 def cmd_create(args):
     """Interactive from the muster (c): host, agent, directory, name — each
-    an fzf pick with the default on top, so four Enters accept lovelace +
-    claude + ~ + its basename. One session, one window, one agent."""
+    an fzf pick over the registered options with the first on top, so four
+    Enters accept the flagship, the first-listed agent, ~, and its
+    basename. One session, one window, one agent."""
     def pick(opts, prompt):
         r = run(["fzf", "--prompt", prompt, "--layout", "reverse"],
                 input=opts, capture_output=False, stdout=subprocess.PIPE)
