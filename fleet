@@ -1,22 +1,8 @@
 #!/usr/bin/python3
-"""agent-fleet: awareness and switching for terminal AI-agent sessions.
+"""Awareness and switching for terminal AI-agent sessions in tmux."""
 
-Agents are peers (claude, codex; more register in AGENT_CMDS and
-agent_state). tmux is the fleet: fleet@main is a tmux session on the
-flagship whose windows ARE the agent sessions — linked windows for
-flagship rows, persistent ssh clients onto ship-side shadow sessions for
-remote rows — so every motion (stepping, jumping, picking) is a native
-tmux command and no external code sits in a keypress path. State is read
-from what each agent already writes (no hook): the single writer
-(`muster --write`, run under watch in fleet@main's muster window) polls
-each host's pane inventory + per-agent state, groups panes into the
-manifest, reconciles the fleet session's windows against it, and stamps
-@fleet_* window options for tmux formats to render. fleet prints text
-and invokes tmux.
-"""
-
-import fcntl
 import json
+import mmap
 import os
 import re
 import shlex
@@ -24,18 +10,29 @@ import subprocess
 import sys
 import time
 import urllib.request
+from collections import deque
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "agent-fleet"
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "agent-fleet"
-CADENCE = 2  # the human-glance cadence
-MUSTER_ADDR = "127.0.0.1:45871"
+RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
+CADENCE = 2
+USAGE_CADENCE = 300
+MUSTER_SOCKET = RUNTIME / "agent-fleet-muster.sock"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-AGENT_CMDS = {"claude": "claude", "codex": "codex"}  # peers; pane_current_command → agent
+AGENT_CMDS = {"claude": "claude", "codex": "codex"}
 URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
-# every string field #{q:}-quoted and shlex-parsed, never tab separators
-# (titles are terminal-set strings); the tmux client sanitises non-ASCII
-# unless it runs under a UTF-8 locale, which non-interactive ssh lacks
+AGENT_ICONS = {"claude": "\ue861", "codex": "\ue7cf"}
+STATE_ICONS = {"needs-action": "\uf071", "waiting": "\uf252", "working": "\uf013"}
+HOST_ICONS = {
+    "lovelace": "\uf121",
+    "newton": "\uf5d1",
+    "turing": "\uf2db",
+    "boltzmann": "\uf5d2",
+    "noether": "\uf534",
+}
+# Terminal-set titles require #{q:} and shlex; delimiters are not safe.
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
             "#{pane_pid} #{q:pane_current_command} "
             "#{q:pane_current_path} #{q:pane_title}")
@@ -45,7 +42,7 @@ def hosts():
     lines = (CONFIG / "hosts").read_text().split()
     if not lines:
         sys.exit(f"fleet: {CONFIG / 'hosts'} is empty")
-    return lines  # lines[0] is the flagship's own alias
+    return lines
 
 
 def flagship():
@@ -57,8 +54,6 @@ def run(argv, **kw):
 
 
 def sh(host, script):
-    # remote login shells may be zsh (whose nomatch aborts on empty globs):
-    # scripts are written for sh semantics, so run them under sh everywhere
     argv = (["sh", "-c", script] if host == flagship()
             else ["ssh", host, "sh -c " + shlex.quote(script)])
     r = run(argv)
@@ -70,8 +65,7 @@ def sh(host, script):
 def tmux(host, *args):
     argv = ["tmux", *args]
     if host != flagship():
-        # via sh -c, not the ship's login shell: zsh equals-expands a leading
-        # `=` (which shlex.quote leaves bare, being POSIX-safe) in =targets
+        # A remote zsh expands tmux's =targets.
         cmd = "tmux " + " ".join(shlex.quote(a) for a in args)
         argv = ["ssh", host, "sh -c " + shlex.quote(cmd)]
     r = run(argv)
@@ -83,8 +77,7 @@ def tmux(host, *args):
 
 
 def tmux_batched(host, cmds):
-    # chained invocations hit the client's message size cap ("command too
-    # long"): send in chunks well under it
+    # tmux clients reject command strings around 16 KiB.
     chunk, size = [], 0
     for c in cmds:
         n = sum(len(a) + 1 for a in c) + 2
@@ -97,40 +90,26 @@ def tmux_batched(host, cmds):
         tmux(host, *[a for cc in chunk for a in cc + [";"]][:-1])
 
 
-def write_atomic(path, text):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}")
-    tmp.write_text(text)
-    tmp.replace(path)
-
-
-def absent(name):
-    # "can't find" is the verified wording for a missing session; anything
-    # else is a boundary failure
-    r = run(["tmux", "has-session", "-t", f"={name}"])
-    if r.returncode and "can't find" not in r.stderr:
-        sys.exit(f"fleet: tmux has-session {name}: {r.stderr.strip()}")
-    return bool(r.returncode)
-
-
-def muster_key():
-    return Path(os.environ["XDG_RUNTIME_DIR"]) / "agent-fleet-muster.key"
+def absent(host, name):
+    argv = ["tmux", "has-session", "-t", f"={name}"]
+    if host != flagship():
+        argv = ["ssh", host, "tmux has-session -t " + shlex.quote(f"={name}")]
+    r = run(argv)
+    if not r.returncode:
+        return False
+    if r.returncode == 1 and ("can't find session" in r.stderr
+                              or "no server running" in r.stderr):
+        return True
+    sys.exit(f"fleet: tmux has-session {name} on {host}: {r.stderr.strip()}")
 
 
 def muster_push(action):
-    # the muster column is an fzf --listen process; absent key file or a
-    # refused connection mean no column is open — the only named skips
-    kf = muster_key()
-    if not kf.exists():
+    if not MUSTER_SOCKET.exists():
         return
-    req = urllib.request.Request(
-        f"http://{MUSTER_ADDR}", action.encode(),
-        {"x-api-key": kf.read_text().split(": ", 1)[1].strip()})
-    try:
-        urllib.request.urlopen(req, timeout=1)
-    except urllib.error.URLError as e:
-        if not isinstance(e.reason, ConnectionRefusedError):
-            raise
+    r = run(["curl", "--silent", "--show-error", "--unix-socket",
+             str(MUSTER_SOCKET), "-X", "POST", "-d", action, "http://localhost"])
+    if r.returncode and MUSTER_SOCKET.exists():
+        sys.exit(f"fleet: muster socket: {r.stderr.strip()}")
 
 
 def check_screen(screen):
@@ -139,10 +118,12 @@ def check_screen(screen):
     return screen
 
 
-# ---------- the log book (transcript stores; import fleet to compose) ----------
+def selected_screen(args):
+    if args.screen:
+        return check_screen(args.screen)
+    screen = tmux(flagship(), "show-option", "-gqv", "@fleet_focused_station").strip()
+    return check_screen(screen or "main")
 
-from collections import deque
-from dataclasses import dataclass
 
 CLAUDE = Path.home() / ".claude/projects"
 CODEX = Path.home() / ".codex/sessions"
@@ -156,7 +137,6 @@ class Session:
     mtime: float
 
     def cwd(self):
-        # the exact cwd lives in the transcript head, not the filename
         for d in events(self):
             if self.agent == "claude" and "cwd" in d:
                 return d["cwd"]
@@ -166,7 +146,6 @@ class Session:
 
 
 def sessions(agent=None):
-    """All local sessions, newest first. Cheap: filesystem metadata only."""
     out = []
     if agent in (None, "claude"):
         for f in CLAUDE.glob("*/*.jsonl"):
@@ -178,25 +157,51 @@ def sessions(agent=None):
 
 
 def session_at(agent, path):
-    """A Session for a known transcript path (session id from the filename)."""
     p = Path(path)
     return Session(agent, p.stem[-36:], p, p.stat().st_mtime)
 
 
+def event_time(d):
+    return datetime.fromisoformat(d["timestamp"].replace("Z", "+00:00")).timestamp()
+
+
+def last_event_time(path):
+    for d in reverse_events(path):
+        if "timestamp" in d:
+            return int(event_time(d))
+    raise ValueError(f"no timestamped events in {path}")
+
+
+def reverse_events(path):
+    with open(path, "rb") as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        end = len(data)
+        while end:
+            start = data.rfind(b"\n", 0, end)
+            line = data[start + 1:end]
+            end = start
+            if line:
+                yield json.loads(line)
+
+
+def account_usage(agent):
+    r = run(["fleet-usage", agent])
+    if r.returncode:
+        raise OSError(r.stderr.strip())
+    return r.stdout.strip()
+
 
 def live_state(s):
-    """(state, summary) from a codex rollout's turn markers: task_started
-    with no following task_complete is working, and the last agent_message
-    is the nearest thing codex writes to a summary (it self-titles nothing)."""
-    boundary, summary = "task_complete", ""
+    boundary, summary, updated = "task_complete", "", None
     for d in events(s):
+        if "timestamp" in d:
+            updated = event_time(d)
         if d.get("type") == "event_msg":
             t = d["payload"]["type"]
             if t in ("task_started", "task_complete"):
                 boundary = t
             elif t == "agent_message":
                 summary = d["payload"]["message"]
-    return ("working" if boundary == "task_started" else "waiting"), summary
+    return ("working" if boundary == "task_started" else "waiting"), summary, int(updated)
 
 
 def events(s):
@@ -207,7 +212,6 @@ def events(s):
 
 
 def texts(s, role="assistant", n=1):
-    """The last n message texts of a role, oldest first."""
     keep = deque(maxlen=n)
     for d in events(s):
         if s.agent == "claude" and d.get("type") == role:
@@ -227,7 +231,6 @@ def texts(s, role="assistant", n=1):
 
 
 def resolve_log(prefix, agent=None):
-    """A session by id prefix; no prefix means the most recent session."""
     all_ = sessions(agent)
     if not all_:
         sys.exit("fleet: no sessions")
@@ -251,8 +254,6 @@ def age(t):
 
 
 def info(s):
-    """Everything a transcript tells us, one pass: the complete view an
-    agent shouldn't have to relearn."""
     models, first_ts, counts = [], None, {}
     branch = version = None
     for d in events(s):
@@ -295,11 +296,7 @@ def cmd_latest(args):
         print(t)
 
 
-# ---------- per-host poll (runs locally on every host; uses the library) ----------
-
 def child_map():
-    """pid → child pids, from one ps call (per-pane pgrep is too slow on
-    the poll's hot path)."""
     kids = {}
     for line in run(["ps", "-eo", "pid=,ppid="]).stdout.splitlines():
         pid, ppid = (int(x) for x in line.split())
@@ -317,8 +314,6 @@ def descendants(pid, kids):
 
 
 def open_transcript(tree, needle):
-    """The transcript a pane's process tree holds open (codex keeps its
-    rollout open; claude does not — hence claude's registry gives its id)."""
     for p in tree:
         try:
             entries = os.listdir(f"/proc/{p}/fd")
@@ -335,32 +330,20 @@ def open_transcript(tree, needle):
 
 
 def claude_agents():
-    """Claude's own registry of running sessions, keyed by pid: the
-    authoritative, hook-free source of state + exact session id."""
     r = run(["claude", "agents", "--json"])
-    if r.returncode:  # older claude without the command: caller falls back
-        return {}
+    r.check_returncode()
     return {x["pid"]: x for x in json.loads(r.stdout)}
 
 
-def claude_status(entry):
-    """Registry status → fleet state. `state: blocked` is claude's
-    needs-input (it pairs with needs:"send a prompt" in jobs/state.json);
-    otherwise the running `status` is busy or idle."""
+def claude_status(entry, title):
     if entry.get("state") == "blocked":
         return "needs-action"
-    status = entry["status"]
-    if status == "busy":
-        return "working"
-    if status == "idle":
+    if entry["status"] == "idle" or title.startswith("✳"):
         return "waiting"
-    sys.exit(f"fleet: unknown claude agent status {status!r}")
+    return "working"
 
 
 def cmd_poll(args):
-    """Print this host's agent panes as JSON, state and recency read from
-    what each agent exposes about itself. Run locally or over ssh by the
-    flagship poll."""
     cmd_agent = {cmd: agent for agent, cmd in AGENT_CMDS.items()}
     agents = claude_agents()
     kids = child_map()
@@ -371,59 +354,40 @@ def cmd_poll(args):
     for line in r.stdout.splitlines():
         sess, win, widx, pid, ppid, cmd, cwd, title = shlex.split(line)
         agent = cmd_agent.get(cmd)
-        if agent is None or "@" in sess:  # non-agent or fleet-created
+        if agent is None or "@" in sess:
             continue
         tree = [int(ppid), *descendants(int(ppid), kids)]
         if agent == "claude":
-            entry = next((agents[p] for p in tree if p in agents), None)
-            if entry:  # the registry: authoritative state + exact session id.
-                state = claude_status(entry)  # title stays the pane's own ✳
-                f = CLAUDE / entry["cwd"].replace("/", "-").replace(".", "-") \
-                    / f"{entry['sessionId']}.jsonl"
-                ts = int(f.stat().st_mtime) if f.exists() else 0
-            else:  # not in the registry: fall back to the pane title glyph
-                state = "waiting" if title.startswith("✳") else "working"
-                ts = 0
-        elif agent == "codex":  # no registry/title; its open rollout carries state
+            entry = next(agents[p] for p in tree if p in agents)
+            state = claude_status(entry, title)
+            f = CLAUDE / entry["cwd"].replace("/", "-").replace(".", "-") \
+                / f"{entry['sessionId']}.jsonl"
+            ts = last_event_time(f) if f.exists() else 0
+        elif agent == "codex":
             roll = open_transcript(tree, "rollout-")
-            if roll:
-                s = session_at("codex", roll)
-                state, title = live_state(s)
-                ts = int(s.mtime)
-            else:
-                state, ts = "working", 0
+            s = session_at("codex", roll)
+            state, title, ts = live_state(s)
         else:
             sys.exit(f"fleet: no poll reader for agent {agent!r}")
-        title = " ".join(title.split())  # single line: a summary with a
-        rows.append(dict(session=sess, win=win, window=int(widx),  # newline
-                         pane_id=pid, agent=agent, state=state,     # breaks the
-                         title=title, cwd=cwd, ts=ts))              # tab-delimited row
+        title = " ".join(title.split())
+        rows.append(dict(session=sess, win=win, window=int(widx), pane_id=pid,
+                         agent=agent, state=state, title=title, cwd=cwd, ts=ts))
     print(json.dumps(rows))
 
 
-# ---------- the manifest (single writer) ----------
-
 def poll(host):
-    """One host's agent panes, via `fleet _poll` run there (the library
-    reads each agent's own transcript locally). Returns None when the host
-    is unreachable (a failed poll is host-unusable, never "all panes
-    died"); a genuine _poll crash surfaces its stderr and is loud."""
     argv = ["fleet", "_poll"] if host == flagship() else ["ssh", host, "fleet _poll"]
     r = run(argv)
     if r.stderr:
         print(r.stderr, end="", file=sys.stderr)
     if r.returncode:
-        if r.returncode == 255:  # ssh transport failure
+        if r.returncode == 255:
             return None
         sys.exit(f"fleet: _poll on {host} failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
 def merge():
-    """Agent panes group by host:window_id into rows: urgency wins (a
-    working sibling never masks a waiting pane), cwd/title/recency follow
-    the urgent pane. enter/scroll keep an exact pane_id only when a row
-    holds exactly one agent pane."""
     pane_rows, unreachable = [], []
     for host in hosts():
         got = poll(host)
@@ -440,8 +404,8 @@ def merge():
             rows[key] = dict(p, count=1)
             continue
         g["count"] += 1
-        g["ts"] = max(g["ts"], p["ts"])  # row recency = newest pane
-        g["pane_id"] = None  # ambiguous target: enter/scroll must refuse
+        g["ts"] = max(g["ts"], p["ts"])
+        g["pane_id"] = None
         if URGENCY[p["state"]] < URGENCY[g["state"]]:
             g.update(state=p["state"], cwd=p["cwd"], title=p["title"],
                      agent=p["agent"])
@@ -453,38 +417,28 @@ def shadow(win):
     return f"fleet@w{win.lstrip('@')}"
 
 
-def reconcile(rows, unreachable):
-    """Make fleet@main's windows mirror the manifest: one window per row —
-    linked for flagship rows, an ssh client onto a ship-side shadow for
-    remote rows — with @fleet_* options restamped. Window order IS the
-    muster order: pennant number = window index = position in the
-    (urgency, newest-change) sort, recomputed at cadence, meaningful only
-    as currently displayed. Reordering pauses while any client holds the
-    conn key-table (the ring never shifts under fingers). Poll-cadence
-    work, off every keypress path. Windows of unreachable hosts are never
-    killed (a failed poll is host-unusable, never "all rows died"); they
-    sink below the live rows, visibly stale."""
+def fleet_inventory():
     fs = "fleet@main"
-    cur = tmux(flagship(), "display", "-p", "-t", f"={fs}:",
-               "#{window_id}").strip()
     have = {}
-    # @fleet_src: the remote build record, written once at creation; local rows carry none
-    for line in tmux(flagship(), "list-windows", "-t", f"={fs}", "-F",
-                     "#{window_index} #{q:window_id} #{q:@fleet_host} "
-                     "#{q:@fleet_win} #{q:@fleet_src}").splitlines():
-        parts = shlex.split(line)
-        if parts[0] == "0":
-            continue  # the muster window
-        if len(parts) < 4:
-            sys.exit(f"fleet: unstamped window {fs}:{parts[0]} — not fleet's, refusing to own it")
-        key = (parts[2], parts[3])
+    fmt = ("idx=#{window_index} wid=#{q:window_id} host=#{q:@fleet_host} "
+           "win=#{q:@fleet_win} src=#{q:@fleet_src} state=#{q:@fleet_state} "
+           "changed=#{q:@fleet_state_changed}")
+    for line in tmux(flagship(), "list-windows", "-t", f"={fs}", "-F", fmt).splitlines():
+        d = dict(x.partition("=")[::2] for x in shlex.split(line))
+        if d["idx"] == "0":
+            continue
+        if not d["host"] or not d["win"]:
+            sys.exit(f"fleet: unstamped window {fs}:{d['idx']} — not fleet's, refusing to own it")
+        key = (d["host"], d["win"])
         if key in have:
-            sys.exit(f"fleet: windows {fs}:{have[key]['idx']} and {fs}:{parts[0]} "
-                     f"both claim {parts[2]}:{parts[3]}")
-        have[key] = dict(idx=parts[0], wid=parts[1],
-                         src=parts[4] if len(parts) > 4 else "")
-    want = {(r["host"], r["win"]): r for r in rows}
-    # dead rows and migrated shadows: kill and recreate
+            sys.exit(f"fleet: windows {fs}:{have[key]['idx']} and {fs}:{d['idx']} "
+                     f"both claim {d['host']}:{d['win']}")
+        have[key] = d
+    return have
+
+
+def remove_missing(have, want, unreachable):
+    fs = "fleet@main"
     doomed_shadows = {}
     for (host, win), w in list(have.items()):
         r = want.get((host, win))
@@ -493,20 +447,31 @@ def reconcile(rows, unreachable):
         if src_ok:
             continue
         if host in unreachable:
-            continue  # a failed poll is host-unusable, never "all rows died"
+            continue
         if host == flagship():
             tmux(flagship(), "unlink-window", "-t", f"={fs}:{w['idx']}")
         else:
             tmux(flagship(), "kill-window", "-t", f"={fs}:{w['idx']}")
-            if r is None or w["src"] != r["session"]:  # dead or migrated
+            if r is None or w["src"] != r["session"]:
                 doomed_shadows.setdefault(host, []).append(shadow(win))
         del have[(host, win)]
     for host, names in doomed_shadows.items():
         if sh(host, "; ".join(f"tmux kill-session -t {shlex.quote('=' + n)}"
                               for n in names)).returncode:
             sys.exit(f"fleet: shadow cleanup on {host} failed")
-    frozen = "fleet" in tmux(flagship(), "list-clients", "-F",
-                             "#{client_key_table}").split()
+
+
+def ordering_frozen():
+    for line in tmux(flagship(), "list-clients", "-F",
+                     "#{q:session_name} #{client_key_table}").splitlines():
+        session, table = shlex.split(line)
+        if session.startswith("fleet@") and session != "fleet@muster" and table == "fleet":
+            return True
+    return False
+
+
+def number_rows(rows, have, want, frozen):
+    fs = "fleet@main"
     n, stale_num = 0, {}
     if frozen:
         n = max((int(w["idx"]) for w in have.values()), default=0)
@@ -523,9 +488,8 @@ def reconcile(rows, unreachable):
         for k in sorted(set(have) - set(want), key=lambda k: int(have[k]["idx"])):
             n += 1
             order[k] = stale_num[k] = n
-        # two-phase: step aside then land, so indices never collide.
-        # -d keeps a move from becoming current (man: as link-window),
-        # except the viewed window itself, whose landing must select it
+        cur = tmux(flagship(), "display", "-p", "-t", f"={fs}:",
+                   "#{window_id}").strip()
         moves, land = [], []
         for k, num in order.items():
             w = have.get(k)
@@ -537,17 +501,21 @@ def reconcile(rows, unreachable):
                              "-t", f"{fs}:{num}"])
         if moves:
             tmux_batched(flagship(), moves + land)
+    return stale_num
+
+
+def create_rows(rows, have):
+    fs = "fleet@main"
+    want = {(r["host"], r["win"]): r for r in rows}
     for (host, win), r in want.items():
         if (host, win) in have:
             continue
-        # identity stamps ride the creation: no window survives half-stamped
         ident = ["set-option", "-w", "-t", f"{fs}:{r['num']}", "@fleet_host", host,
                  ";", "set-option", "-w", "-t", f"{fs}:{r['num']}", "@fleet_win", win]
         if host == flagship():
             tmux(flagship(), "link-window", "-d", "-s", win, "-t", f"={fs}:{r['num']}",
                  ";", *ident)
         else:
-            # sh, not the login shell: zsh =word expansion eats exact targets
             attach = (f"exec tmux -u new -A -t {shlex.quote('=' + r['session'])} "
                       f"-s {shlex.quote(shadow(win))} \\; select-window -t {win}")
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
@@ -557,10 +525,21 @@ def reconcile(rows, unreachable):
                  ";", *ident,
                  ";", "set-option", "-w", "-t", f"{fs}:{r['num']}",
                  "@fleet_src", r["session"])
+
+
+def stamp_rows(rows, have, stale_num, now):
+    fs = "fleet@main"
     stamps = []
     for r in rows:
-        for opt, val in dict(host=r["host"], win=r["win"], state=r["state"],
-                             num=str(r["num"]), cwd=Path(r["cwd"]).name,
+        old = have.get((r["host"], r["win"]))
+        changed = (old["changed"] if old and old["state"] == r["state"]
+                   and old["changed"] else str(now))
+        r["state_changed"] = int(changed)
+        for opt, val in dict(host=r["host"], win=r["win"], session=r["session"],
+                             window=str(r["window"]), pane=r["pane_id"] or "",
+                             agent=r["agent"], state=r["state"], state_changed=changed,
+                             count=str(r["count"]), ts=str(r["ts"]),
+                             num=str(r["num"]), cwd=r["cwd"],
                              name=f"{r['session']}:{r['window']}",
                              title=r["title"], stale="").items():
             stamps.append(["set-option", "-w", "-t", f"{fs}:{r['num']}",
@@ -574,76 +553,109 @@ def reconcile(rows, unreachable):
         tmux_batched(flagship(), stamps)
 
 
-def snapshot_write():
+def reconcile(rows, unreachable, now):
+    have = fleet_inventory()
+    want = {(r["host"], r["win"]): r for r in rows}
+    remove_missing(have, want, unreachable)
+    frozen = ordering_frozen()
+    stale_num = number_rows(rows, have, want, frozen)
+    create_rows(rows, have)
+    stamp_rows(rows, have, stale_num, now)
+    return frozen
+
+
+def manifest_write():
+    now = int(time.time())
     rows, unreachable = merge()
-    reconcile(rows, unreachable)
-    snap = dict(snapshot_ts=int(time.time()), rows=rows, unreachable=unreachable)
-    write_atomic(CACHE / "state.json", json.dumps(snap))
+    frozen = reconcile(rows, unreachable, now)
+    usage_ts = tmux(flagship(), "show-option", "-qv", "-t", "fleet@main",
+                    "@fleet_usage_ts").strip()
+    if not usage_ts or now - int(usage_ts) >= USAGE_CADENCE:
+        usage = {}
+        for agent in ("claude", "codex"):
+            try:
+                usage[agent] = account_usage(agent)
+            except OSError as e:
+                usage[agent] = f"unavailable: {e}"
+        tmux(flagship(), "set-option", "-t", "fleet@main", "@fleet_claude_usage",
+             usage["claude"], ";", "set-option", "-t", "fleet@main",
+             "@fleet_codex_usage", usage["codex"], ";", "set-option", "-t",
+             "fleet@main", "@fleet_usage_ts", str(now))
+    tmux(flagship(), "set-option", "-t", "fleet@main", "@fleet_unreachable",
+         json.dumps(unreachable), ";", "set-option", "-t", "fleet@main",
+         "@fleet_snapshot_ts", str(now), ";", "set-option", "-t", "fleet@main",
+         "@fleet_frozen", "1" if frozen else "")
     muster_push("reload(fleet muster --rows)")
-    return snap
+    return manifest()
 
 
-def need_snapshot():
-    f = CACHE / "state.json"
-    if not f.exists():
-        sys.exit("fleet: no manifest — is the writer muster running?")
-    return json.loads(f.read_text())
+def manifest():
+    fmt = ("index=#{window_index} host=#{q:@fleet_host} win=#{q:@fleet_win} "
+           "session=#{q:@fleet_session} window=#{q:@fleet_window} "
+           "pane=#{q:@fleet_pane} agent=#{q:@fleet_agent} "
+           "state=#{q:@fleet_state} changed=#{q:@fleet_state_changed} "
+           "count=#{q:@fleet_count} ts=#{q:@fleet_ts} "
+           "cwd=#{q:@fleet_cwd} title=#{q:@fleet_title} "
+           "stale=#{q:@fleet_stale} snapshot_ts=#{q:@fleet_snapshot_ts} "
+           "unreachable=#{q:@fleet_unreachable} frozen=#{q:@fleet_frozen} "
+           "claude_usage=#{q:@fleet_claude_usage} codex_usage=#{q:@fleet_codex_usage}")
+    lines = tmux(flagship(), "list-windows", "-t", "=fleet@main", "-F", fmt).splitlines()
+    parsed = [dict(x.partition("=")[::2] for x in shlex.split(line)) for line in lines]
+    rows = []
+    for d in parsed:
+        if d["index"] == "0" or d["stale"]:
+            continue
+        rows.append(dict(host=d["host"], win=d["win"], session=d["session"],
+                         window=int(d["window"]), pane_id=d["pane"] or None,
+                         agent=d["agent"], state=d["state"], count=int(d["count"]),
+                         state_changed=int(d["changed"]), ts=int(d["ts"]),
+                         cwd=d["cwd"], title=d["title"],
+                         num=int(d["index"])))
+    return dict(snapshot_ts=int(parsed[0]["snapshot_ts"]), rows=rows,
+                unreachable=json.loads(parsed[0]["unreachable"]),
+                frozen=bool(parsed[0]["frozen"]),
+                claude_usage=parsed[0]["claude_usage"],
+                codex_usage=parsed[0]["codex_usage"])
 
-
-# ---------- muster (the roll call; watch owns refresh, tmux owns the rest) ----------
 
 COLOR = {"needs-action": "\033[1;31m", "waiting": "\033[33m", "working": "\033[32m"}
-LABEL = {"needs-action": "ACTION", "waiting": "WAITING", "working": "WORKING"}
 
 
 def cmd_muster(args):
     if args.write:
-        CACHE.mkdir(parents=True, exist_ok=True)
-        lock = (CACHE / "write.lock").open("w")
-        try:  # the single-writer invariant is the OS primitive, not convention
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit("fleet: another writer holds write.lock")
-        snap = snapshot_write()
+        snap = manifest_write()
     else:
-        snap = need_snapshot()
+        snap = manifest()
     if args.rows:
         return muster_rows(snap)
     c = (lambda code, s: f"{code}{s}\033[0m") if args.color else (lambda code, s: s)
-    # an absent fleet session is a normal pre-up state, not an error
-    cur = ()
-    probe = run(["tmux", "display", "-p", "-t", "=fleet@main:",
-                 "#{q:@fleet_host} #{q:@fleet_win}"])
-    if probe.returncode == 0:
-        cur = tuple(shlex.split(probe.stdout))
-    elif "can't find" not in probe.stderr:
-        sys.exit(f"fleet: tmux display fleet@main: {probe.stderr.strip()}")
+    cur = tuple(shlex.split(tmux(flagship(), "display", "-p", "-t", "=fleet@main:",
+                                 "#{q:@fleet_host} #{q:@fleet_win}")))
     out = []
     age = int(time.time()) - snap["snapshot_ts"]
     if age > CADENCE:
         out.append(c("\033[2m", f"age {age}s"))
+    if snap["frozen"]:
+        out.append(c("\033[35m", "CONN — ordering held"))
     for host in snap["unreachable"]:
         out.append(c("\033[1;31m", f"{host} unreachable"))
-    group = None
     for r in snap["rows"]:
-        if r["state"] != group:
-            group = r["state"]
-            bar = "━" * (26 - len(LABEL[group]))
-            out.append(c(COLOR[group], f"━ {LABEL[group]} {bar}"))
         name = f"{r['session']}:{r['window']}"
         if r["count"] > 1:
             name += f"×{r['count']}"
-        body = f"{r['num']:>3} {name[:15]:<15} {r['host'][:8]:>8}"
+        body = f"{STATE_ICONS[r['state']]} {r['num']:>3} {name[:15]:<15} {HOST_ICONS[r['host']]}"
         out.append(c("\033[7m", body) if (r["host"], r["win"]) == cur else body)
     print("\n".join(out))
 
 
 def muster_rows(snap):
-    """fzf input for the muster column: host, window id, pennant, display.
-    The first line is the last-update stamp (fzf --header-lines=1), so a
-    frozen clock means a dead writer."""
     from collections import Counter
-    out = [f"-\t-\t-\t\033[2m{time.strftime('%H:%M:%S', time.localtime(snap['snapshot_ts']))}\033[0m"]
+    stamp = time.strftime('%H:%M:%S', time.localtime(snap['snapshot_ts']))
+    if snap["frozen"]:
+        stamp += "  \033[35mCONN — ordering held\033[0m"
+    out = [f"-\t-\t-\t\033[2m{stamp}\033[0m",
+           f"-\t-\t-\t{AGENT_ICONS['claude']} {snap['claude_usage']}",
+           f"-\t-\t-\t{AGENT_ICONS['codex']} {snap['codex_usage']}"]
     for host in snap["unreachable"]:
         out.append(f"{host}\t-\t-\t\033[1;31m{host} unreachable\033[0m")
     rows = snap["rows"]
@@ -652,30 +664,20 @@ def muster_rows(snap):
               else f"{r['session']}:{r['window']}")
              + (f"×{r['count']}" if r["count"] > 1 else "") for r in rows]
     wn = max((len(n) for n in names), default=0)
-    short = {"claude": "\ue861", "codex": "\ue7cf"}  # fa-claude / fa-openai brand glyphs
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
-        line = (f"{COLOR[r['state']]}{name:<{wn + 2}}\033[0m"
-                f"\033[2m{short[r['agent']]} {r['host'][0].upper()} "
+        line = (f"{COLOR[r['state']]}{STATE_ICONS[r['state']]} {name:<{wn + 2}}\033[0m"
+                f"\033[2m{AGENT_ICONS[r['agent']]} {HOST_ICONS[r['host']]} "
                 f"{Path(r['cwd']).name:<{wc + 1}}\033[0m{r['title']}")
         out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{line}")
     print("\n".join(out))
 
 
 def cmd_muster_ui(args):
-    """The muster column: one persistent fzf. Rows come from muster_rows;
-    the poller and the fleet's after-select-window hook push to the listen
-    socket (reload keeps the cursor's screen position — verified — so a
-    sunk row leaves the cursor on whatever slides into its place)."""
-    import secrets
-    kf = muster_key()
-    kf.write_text(f"x-api-key: {secrets.token_hex(16)}")
-    kf.chmod(0o600)
-    env = dict(os.environ, FZF_API_KEY=kf.read_text().split(": ", 1)[1])
-    os.execvpe("fzf", [
-        "fzf", "--listen", MUSTER_ADDR, "--ansi", "--no-input",
+    os.execvp("fzf", [
+        "fzf", "--listen", str(MUSTER_SOCKET), "--ansi", "--no-input",
         "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
-        "--header-lines", "1", "--info", "hidden", "--no-scrollbar",
+        "--header-lines", "3", "--info", "hidden", "--no-scrollbar",
         "--preview", "fleet peek {1} {2} | tail -n $FZF_PREVIEW_LINES",
         "--preview-window", "down,50%,border-top",
         "--bind", "start:reload(fleet muster --rows)",
@@ -685,14 +687,10 @@ def cmd_muster_ui(args):
                    "read -r n </dev/tty && echo \"$n\")\")+reload(fleet muster --rows)",
         "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}' "
                    "&& fleet conn --screen main --arm)",
-    ], env)
+    ])
 
 
 def cmd_create(args):
-    """Interactive from the muster (c): host, agent, directory, name — each
-    an fzf pick over the registered options with the first on top, so four
-    Enters accept the flagship, the first-listed agent, ~, and its
-    basename. One session, one window, one agent."""
     def pick(opts, prompt):
         r = run(["fzf", "--prompt", prompt, "--layout", "reverse"],
                 input=opts, capture_output=False, stdout=subprocess.PIPE)
@@ -705,21 +703,21 @@ def cmd_create(args):
                     '! -path "*/.*" 2>/dev/null | tail -n +2 | sort')
     cwd = pick(dirs.stdout, "dir> ")
     default = Path(cwd).name
-    r = run(["fzf", "--print-query", "--prompt", f"name> ", "--layout", "reverse"],
+    r = run(["fzf", "--print-query", "--prompt", "name> ", "--layout", "reverse"],
             input=default, capture_output=False, stdout=subprocess.PIPE)
     lines = r.stdout.splitlines()
     name = (lines[-1] if lines else default).strip() or default
     if not NAME_RE.match(name):
         sys.exit(f"fleet: session names are [A-Za-z0-9_-]+, got {name!r}")
     tmux(host, "new-session", "-d", "-s", name, "-c", cwd, agent)
-    # bounded startup handshake: the poller musters it within two cadences
     for _ in range(4):
         time.sleep(CADENCE)
         for line in tmux(flagship(), "list-windows", "-t", "=fleet@main", "-F",
                          "#{window_index} #{q:@fleet_host} #{q:@fleet_name}").splitlines():
             parts = shlex.split(line)
             if len(parts) == 3 and parts[1] == host and parts[2].split(":")[0] == name:
-                tmux(flagship(), "select-window", "-t", f"=fleet@main:{parts[0]}")
+                tmux(flagship(), "select-window",
+                     "-t", f"=fleet@{selected_screen(args)}:{parts[0]}")
                 return
     sys.exit(f"fleet: {name} on {host} was created but never mustered")
 
@@ -728,36 +726,28 @@ def cmd_peek(args):
     print(tmux(args.host, "capture-pane", "-ep", "-t", args.win), end="")
 
 
-# ---------- fleet up (build the fleet session; owns no rows) ----------
-
 def cmd_up(args):
-    """Exactly four things: create =fleet@<screen> if absent, set its
-    session-scoped options, create window 0 (the muster watch) if absent,
-    exit. A dead watch closes its window, so death is re-created here;
-    row windows belong to the poller — no repair loops, no choreography."""
-    screen = check_screen(args.screen)
+    screen = check_screen(args.screen or "main")
     fs = f"fleet@{screen}"
     watch = "watch -t -c fleet muster --color --write"
-    if absent(fs):
+    if absent(flagship(), fs):
         if screen == "main":
             tmux(flagship(), "new-session", "-d", "-s", fs, "-n", "muster", watch)
-        else:  # grouped screens share fleet@main's windows (and its one writer)
-            if absent("fleet@main"):
+        else:
+            if absent(flagship(), "fleet@main"):
                 sys.exit("fleet: fleet@main is not up — run: fleet up --screen main")
             tmux(flagship(), "new-session", "-d", "-t", "fleet@main", "-s", fs)
-    # set-option rejects =exact targets; plain names are safe (@ is fleet's)
     tmux(flagship(), "set-option", "-t", fs, "renumber-windows", "off")
     tmux(flagship(), "set-option", "-t", fs, "status-right",
          "#{?#{==:#{client_key_table},fleet},#[fg=magenta bold]-- CONN -- #[default],}"
+         "#{?#{==:#{session_name},fleet@#{@fleet_focused_station}},#[fg=cyan]● #[default],}"
          "#[fg=color3]%d %b %R ")
-    if screen == "main":
-        # selection follows into the muster column's fzf socket (row N =
-        # window N; curl failure = no column open, the one named skip)
-        curl = ("curl -s -m 1 -H @" + str(muster_key())
-                + " -XPOST -d \\\"pos(#{window_index})\\\" "
-                + f"http://{MUSTER_ADDR} >/dev/null 2>&1 || true")
-        tmux(flagship(), "set-hook", "-t", fs, "after-select-window",
-             f"if -F \"#{{window_index}}\" 'run-shell -b \"{curl}\"'")
+    curl = (f"curl -s --max-time .2 --unix-socket {shlex.quote(str(MUSTER_SOCKET))} "
+            "-XPOST -d \\\"pos(#{window_index})\\\" http://localhost >/dev/null 2>&1 || :")
+    tmux(flagship(), "set-hook", "-t", fs, "after-select-window",
+         f"run-shell -b \"{curl}\"")
+    tmux(flagship(), "set-hook", "-t", fs, "client-focus-in",
+         f"set-option -g @fleet_focused_station {screen} ; run-shell -b \"{curl}\"")
     if not any(line.startswith("0 ") for line in
                tmux(flagship(), "list-windows", "-t", f"={fs}",
                     "-F", "#{window_index} ").splitlines()):
@@ -765,10 +755,75 @@ def cmd_up(args):
     print(f"{fs} up")
 
 
-# ---------- the conn (arms the native key-table; motions are pure tmux) ----------
+def station_session(name):
+    name = check_screen(name)
+    fs = f"fleet@{name}"
+    if absent(flagship(), fs):
+        sys.exit(f"fleet: station {name!r} is not up")
+    return fs
+
+
+def stations():
+    focused = tmux(flagship(), "show-option", "-gqv", "@fleet_focused_station").strip()
+    out = []
+    for session in tmux(flagship(), "list-sessions", "-F", "#{session_name}").splitlines():
+        if not session.startswith("fleet@") or session == "fleet@muster":
+            continue
+        screen = session.removeprefix("fleet@")
+        fmt = ("index=#{window_index} win=#{q:window_id} name=#{q:@fleet_name} "
+               "state=#{q:@fleet_state}")
+        line = tmux(flagship(), "display", "-p", "-t", f"={session}:", fmt).strip()
+        d = dict(x.partition("=")[::2] for x in shlex.split(line))
+        out.append(dict(station=screen, focused=screen == focused,
+                        index=int(d["index"]), win=d["win"],
+                        name=d["name"], state=d["state"]))
+    return sorted(out, key=lambda s: s["station"])
+
+
+def cmd_station_list(args):
+    for station in stations():
+        mark = "*" if station["focused"] else " "
+        shown = station["name"] or "empty"
+        print(f"{mark} {station['station']:<16} {station['index']:>3}  {shown}")
+
+
+def cmd_station_focus(args):
+    fs = station_session(args.station)
+    tmux(flagship(), "set-option", "-g", "@fleet_focused_station", args.station)
+    index = tmux(flagship(), "display", "-p", "-t", f"={fs}:",
+                 "#{window_index}").strip()
+    muster_push(f"pos({index})")
+
+
+def cmd_station_show(args):
+    fs = station_session(args.station)
+    row = resolve(manifest(), args.target)
+    tmux(flagship(), "select-window", "-t", f"={fs}:{row['num']}")
+
+
+def cmd_station_clear(args):
+    fs = station_session(args.station)
+    tmux(flagship(), "select-window", "-t", f"={fs}:0")
+
+
+def cmd_station_swap(args):
+    a, b = station_session(args.station), station_session(args.other)
+    awin = tmux(flagship(), "display", "-p", "-t", f"={a}:", "#{window_id}").strip()
+    bwin = tmux(flagship(), "display", "-p", "-t", f"={b}:", "#{window_id}").strip()
+    tmux(flagship(), "select-window", "-t", f"={a}:{bwin}", ";",
+         "select-window", "-t", f"={b}:{awin}")
+
+
+def cmd_context(args):
+    snap = manifest()
+    snap["focused_station"] = tmux(
+        flagship(), "show-option", "-gqv", "@fleet_focused_station").strip() or "main"
+    snap["stations"] = stations()
+    print(json.dumps(snap))
+
 
 def cmd_conn(args):
-    fs = f"fleet@{check_screen(args.screen)}"
+    fs = f"fleet@{selected_screen(args)}"
     clients = []
     for line in tmux(flagship(), "list-clients", "-F",
                      "#{client_tty} #{client_key_table} #{q:session_name}").splitlines():
@@ -777,20 +832,18 @@ def cmd_conn(args):
             clients.append((tty, table))
     if not clients:
         sys.exit(f"fleet: no client is attached to {fs}")
-    if any(table == "fleet" for _, table in clients):  # gear toggles
-        if args.arm:  # already armed is what --arm wants: stay
+    if any(table == "fleet" for _, table in clients):
+        if args.arm:
             return
         for tty, _ in clients:
             tmux(flagship(), "switch-client", "-c", tty, "-T", "root")
         return
     origin = tmux(flagship(), "display", "-p", "-t", f"={fs}:", "#{window_id}").strip()
     tmux(flagship(), "set-option", "-t", fs, "@fleet_origin", origin)
-    # arm last: switch-client resets a client's key table
+    # switch-client resets the key table, so arm last.
     for tty, _ in clients:
         tmux(flagship(), "switch-client", "-c", tty, "-T", "fleet")
 
-
-# ---------- switching (every verb is one native tmux command) ----------
 
 def resolve(snap, target):
     rows = snap["rows"]
@@ -798,35 +851,33 @@ def resolve(snap, target):
                else [r for r in rows if r["session"] == target])
     if not matches:
         sys.exit(f"fleet: no session matches {target!r}")
-    if len(matches) > 1:  # session names are not row keys: refuse ambiguity
+    if len(matches) > 1:
         nums = ", ".join(str(r["num"]) for r in matches)
         sys.exit(f"fleet: {target!r} is ambiguous — say a pennant: {nums}")
     return matches[0]
 
 def cmd_switch(args):
-    row = resolve(need_snapshot(), args.target)
+    row = resolve(manifest(), args.target)
     tmux(flagship(), "select-window",
-         "-t", f"=fleet@{check_screen(args.screen)}:{row['num']}")
+         "-t", f"=fleet@{selected_screen(args)}:{row['num']}")
 
 
 def cmd_next(args):
-    fs = f"fleet@{check_screen(args.screen)}"
+    fs = f"fleet@{selected_screen(args)}"
     r = run(["tmux", "next-window", "-a", "-t", f"={fs}"])
-    if r.returncode:  # the no-alert wording is verified on 3.6b; anything
-        sys.exit("fleet: nothing is unacknowledged"  # else is a real boundary
-                 if "no next window" in r.stderr
-                 else f"fleet: tmux next-window on {fs}: {r.stderr.strip()}")
+    if not r.returncode:
+        return
+    if "no next window" in r.stderr:
+        sys.exit("fleet: nothing is unacknowledged")
+    sys.exit(f"fleet: tmux next-window on {fs}: {r.stderr.strip()}")
 
 
 def target_pane(args):
-    """The exact pane a verb acts on: a named row, or the current fleet
-    window's row. Rows holding more than one agent pane refuse — the
-    target is ambiguous and refusal beats guessing."""
-    snap = need_snapshot()
+    snap = manifest()
     if args.target:
         row = resolve(snap, args.target)
     else:
-        fs = f"fleet@{check_screen(args.screen)}"
+        fs = f"fleet@{selected_screen(args)}"
         parts = shlex.split(tmux(flagship(), "display", "-p", "-t", f"={fs}:",
                                  "#{q:@fleet_host} #{q:@fleet_win}"))
         rows = [r for r in snap["rows"]
@@ -852,48 +903,13 @@ def cmd_scroll(args):
 
 
 def cmd_rename(args):
-    if not args.name:  # empty = cancelled from the muster prompt
+    if not args.name:
         return
     if not NAME_RE.match(args.name):
         sys.exit("fleet: session names are [A-Za-z0-9_-]+ (`@` marks fleet sessions)")
-    row = resolve(need_snapshot(), args.target)
+    row = resolve(manifest(), args.target)
     tmux(row["host"], "rename-session", "-t", f"={row['session']}", args.name)
 
-
-def cmd_split(args):
-    """One session per window: every window of a multi-window agent session
-    moves to its own session named <session>-<index>. move-window keeps the
-    running pane (it relinks, never respawns); the window's fleet@main link
-    is a separate winlink and is untouched, so the row survives by id."""
-    for host in hosts():
-        by_sess = {}
-        for line in tmux(host, "list-windows", "-a", "-F",
-                         "#{q:session_name} #{window_index} #{q:window_id}").splitlines():
-            sess, idx, wid = shlex.split(line)
-            if "@" in sess:  # fleet-created sessions are never split
-                continue
-            by_sess.setdefault(sess, []).append((idx, wid))
-        for sess, wins in by_sess.items():
-            if len(wins) < 2:  # already one window = already atomic
-                continue
-            for idx, wid in wins:
-                new = f"{sess}-{idx}"
-                if not absent_on(host, new):
-                    sys.exit(f"fleet: {new} already exists on {host}")
-                tmux(host, "new-session", "-d", "-s", new)
-                tmux(host, "move-window", "-s", wid, "-t", f"={new}:")
-                tmux(host, "kill-window", "-t", f"={new}:0")  # the placeholder shell
-                print(f"{host}: {sess}:{idx} → {new}")
-
-
-def absent_on(host, name):
-    argv = ["tmux", "has-session", "-t", f"={name}"]
-    if host != flagship():
-        argv = ["ssh", host, "tmux has-session -t " + shlex.quote(f"={name}")]
-    return run(argv).returncode != 0
-
-
-# ---------- say (Tier 2 resolver; callers: wake listener, shell) ----------
 
 WORDS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve "
@@ -903,8 +919,6 @@ WORDS.update({w: 20 + 10 * i for i, w in enumerate(
 
 
 def spoken_number(words):
-    """A number only if EVERY word is numeric — 'the one dealing with X'
-    must not read as 1."""
     total, seen = 0, False
     for w in words:
         w = w.strip(",.").lower()
@@ -918,7 +932,6 @@ def spoken_number(words):
 
 
 def llm_resolve(utterance, snap):
-    import urllib.request
     cfg = CONFIG / "llm"
     if not cfg.exists():
         sys.exit(f"fleet: could not resolve {utterance!r} by rule, and no LLM "
@@ -926,19 +939,25 @@ def llm_resolve(utterance, snap):
     base = cfg.read_text().strip()
     try:
         model = json.load(urllib.request.urlopen(f"{base}/models"))["data"][0]["id"]
-    except OSError as e:  # the LLM boundary translates failures, loudly
+    except OSError as e:
         sys.exit(f"fleet: LLM endpoint {base} unreachable: {e}")
-    except (KeyError, IndexError, ValueError) as e:  # incl. JSONDecodeError
+    except (KeyError, IndexError, ValueError) as e:
         sys.exit(f"fleet: LLM /models response was not understood: {e}")
     rows = [dict(num=r["num"], session=r["session"], state=r["state"],
-                 host=r["host"], dir=Path(r["cwd"]).name) for r in snap["rows"]]
+                 state_changed=r["state_changed"], host=r["host"],
+                 dir=Path(r["cwd"]).name, title=r["title"]) for r in snap["rows"]]
+    placement = stations()
+    focused = next((s["station"] for s in placement if s["focused"]), "main")
     prompt = (
-        "You resolve a spoken command against a list of terminal agent sessions. "
-        "Reply with STRICT JSON only: "
-        '{"action": "switch|scroll_up|scroll_down|next|none", "target": <num or null>} '
-        "— optionally \"screen\": \"<name>\" ONLY if the utterance names a screen. "
-        "If the reference is ambiguous, return action none. "
-        f"Sessions: {json.dumps(rows)}\nUtterance: {utterance!r}")
+        "Resolve a spoken command for tmux Fleet. Reply with strict JSON only: "
+        '{"action":"show|swap|clear|focus|scroll_up|scroll_down|next|none",'
+        '"target":<pennant or null>,"station":<name or null>,"other":<name or null>}. '
+        "An omitted station means the focused station. Match sessions by exact name first, "
+        "then title, directory, state and state_changed recency. 'Just finished' means the "
+        "most recently changed waiting session. Close/empty a station means clear its view, "
+        "never terminate an agent. Return none if the reference is ambiguous. "
+        f"Focused station: {focused}. Stations: {json.dumps(placement)}. "
+        f"Sessions: {json.dumps(rows)}. Utterance: {utterance!r}")
     req = urllib.request.Request(
         f"{base}/chat/completions",
         json.dumps(dict(model=model, messages=[dict(role="user", content=prompt)])).encode(),
@@ -948,10 +967,10 @@ def llm_resolve(utterance, snap):
         verdict = json.loads(text)
     except OSError as e:
         sys.exit(f"fleet: LLM call failed: {e}")
-    except (KeyError, IndexError, ValueError) as e:  # incl. JSONDecodeError
+    except (KeyError, IndexError, ValueError) as e:
         sys.exit(f"fleet: LLM reply was not understood: {e}")
     if not isinstance(verdict, dict) or verdict.get("action") not in (
-            "switch", "scroll_up", "scroll_down", "next", "none"):
+            "show", "swap", "clear", "focus", "scroll_up", "scroll_down", "next", "none"):
         sys.exit(f"fleet: LLM reply was not the verdict schema: {verdict!r}")
     return verdict
 
@@ -960,7 +979,7 @@ def cmd_say(args):
     args.utterance = " ".join(args.utterance)
     if not args.utterance:
         sys.exit("fleet: nothing to say")
-    snap = need_snapshot()
+    snap = manifest()
     m = re.match(r"on screen (\S+),? *(.*)", args.utterance, re.I)
     if m:
         spoken = m.group(1).strip(",.").lower()
@@ -979,7 +998,7 @@ def cmd_say(args):
             n = spoken_number(m.group(3).split())
             args.target = str(n) if n is not None else m.group(3)
         return cmd_scroll(args)
-    m = re.fullmatch(r"rename (\S+) to (.+)", u)  # rule-only: free text never reaches the LLM
+    m = re.fullmatch(r"rename (\S+) to (.+)", u)
     if m:
         n = spoken_number([m.group(1)])
         args.target = str(n) if n is not None else m.group(1)
@@ -987,19 +1006,19 @@ def cmd_say(args):
         return cmd_rename(args)
     m = re.fullmatch(r"(?:switch to |go to )?(?:session |the )?(.+)", u)
     if m:
-        n = spoken_number(m.group(1).split())  # whole tail first: "twenty one"
+        n = spoken_number(m.group(1).split())
         if n is not None and any(r["num"] == n for r in snap["rows"]):
             args.target = str(n)
             return cmd_switch(args)
-        name = re.sub(r" one$", "", m.group(1))  # "the mddb one" -> mddb
+        name = re.sub(r" one$", "", m.group(1))
         if any(r["session"] == name for r in snap["rows"]):
             args.target = name
             return cmd_switch(args)
     verdict = llm_resolve(args.utterance, snap)
-    if verdict.get("screen"):
-        args.screen = str(verdict["screen"])
+    if verdict.get("station"):
+        args.screen = str(verdict["station"])
     action = verdict.get("action")
-    if action == "switch" and verdict.get("target") is not None:
+    if action == "show" and verdict.get("target") is not None:
         args.target = str(verdict["target"])
         return cmd_switch(args)
     if action == "next":
@@ -1009,10 +1028,17 @@ def cmd_say(args):
         args.target = (str(verdict["target"])
                        if verdict.get("target") is not None else None)
         return cmd_scroll(args)
+    if action == "clear":
+        args.station = selected_screen(args)
+        return cmd_station_clear(args)
+    if action == "focus" and verdict.get("station"):
+        args.station = str(verdict["station"])
+        return cmd_station_focus(args)
+    if action == "swap" and verdict.get("station") and verdict.get("other"):
+        args.station, args.other = str(verdict["station"]), str(verdict["other"])
+        return cmd_station_swap(args)
     sys.exit(f"fleet: could not resolve {args.utterance!r} (LLM said {verdict})")
 
-
-# ---------- cli ----------
 
 def main():
     import argparse
@@ -1022,7 +1048,7 @@ def main():
     def add(name, fn, *spec):
         sp = sub.add_parser(name)
         sp.set_defaults(fn=fn)
-        sp.add_argument("--screen", default="main")
+        sp.add_argument("--screen")
         for names, kw in spec:
             sp.add_argument(*names, **kw)
         return sp
@@ -1041,7 +1067,24 @@ def main():
         (["target"], dict(nargs="?")))
     add("rename", cmd_rename, (["target"], dict()), (["name"], dict(nargs="?", default="")))
     add("create", cmd_create)
-    add("split", cmd_split)
+    add("context", cmd_context)
+    station = sub.add_parser("station")
+    station_sub = station.add_subparsers(dest="station_cmd", required=True)
+    station_sub.add_parser("list").set_defaults(fn=cmd_station_list)
+    focus = station_sub.add_parser("focus")
+    focus.add_argument("station")
+    focus.set_defaults(fn=cmd_station_focus)
+    show = station_sub.add_parser("show")
+    show.add_argument("station")
+    show.add_argument("target")
+    show.set_defaults(fn=cmd_station_show)
+    clear = station_sub.add_parser("clear")
+    clear.add_argument("station")
+    clear.set_defaults(fn=cmd_station_clear)
+    swap = station_sub.add_parser("swap")
+    swap.add_argument("station")
+    swap.add_argument("other")
+    swap.set_defaults(fn=cmd_station_swap)
     add("_poll", cmd_poll)
     add("list", cmd_list, (["--agent"], dict(choices=["claude", "codex"])),
         (["-n"], dict(type=int, default=20)))

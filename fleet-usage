@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+"""Account-limit readers for the Fleet header."""
+
+import json
+import os
+import sys
+import time
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+
+PROXY = os.environ.get("CODEX_PROXY_URL", "http://127.0.0.1:8080")
+
+
+def progress(percent, width=8):
+    eighths = round(percent * width * 8 / 100)
+    full, partial = divmod(eighths, 8)
+    edge = "▏▎▍▌▋▊▉"[partial - 1] if partial else ""
+    return "█" * full + edge + "░" * (width - full - bool(partial))
+
+
+def field(name, used=0, reset=None):
+    if reset:
+        fmt = "%a %H:%M" if name == "7d" else "%H:%M"
+        reset_at = f"@{time.strftime(fmt, time.localtime(reset))}"
+    else:
+        reset_at = "/0h"
+    width = 10 if name == "5h" else 0
+    return f"{name:<2} {progress(used)} {used:>3g}%{reset_at:<{width}}"
+
+
+def claude():
+    auth = json.loads((Path.home() / ".claude/.credentials.json").read_text())
+    req = urllib.request.Request(
+        "https://api.anthropic.com/api/oauth/usage",
+        headers={"Authorization": f"Bearer {auth['claudeAiOauth']['accessToken']}",
+                 "anthropic-beta": "oauth-2025-04-20"})
+    limits = json.load(urllib.request.urlopen(req))["limits"]
+    fields = {}
+    for limit in limits:
+        if limit["kind"] == "session":
+            name = "5h"
+        elif limit["kind"] == "weekly_all":
+            name = "7d"
+        elif limit["kind"] == "weekly_scoped":
+            continue
+        else:
+            raise ValueError(f"unknown limit kind {limit['kind']!r}")
+        reset = datetime.fromisoformat(limit["resets_at"].replace("Z", "+00:00")).timestamp()
+        fields[name] = field(name, limit["percent"], reset)
+    return "  ".join(fields[name] for name in ("5h", "7d"))
+
+
+def codex():
+    accounts = json.load(urllib.request.urlopen(f"{PROXY}/auth/accounts"))["accounts"]
+    accounts = [a for a in accounts if a["status"] == "active" and a.get("quota")]
+    if len(accounts) != 1:
+        raise ValueError(f"expected one active cached Codex quota, got {len(accounts)}")
+    windows = {"5h": field("5h"), "7d": field("7d")}
+    for quota in (accounts[0]["quota"]["rate_limit"],
+                  accounts[0]["quota"]["secondary_rate_limit"]):
+        if quota is None:
+            continue
+        seconds = quota["limit_window_seconds"]
+        if seconds == 18000:
+            name = "5h"
+        elif seconds == 604800:
+            name = "7d"
+        else:
+            raise ValueError(f"unknown Codex limit window {seconds!r}s")
+        windows[name] = field(name, quota["used_percent"], quota["reset_at"])
+    return "  ".join(windows[name] for name in ("5h", "7d"))
+
+
+def main():
+    readers = {"claude": claude, "codex": codex}
+    if len(sys.argv) != 2 or sys.argv[1] not in readers:
+        sys.exit("usage: fleet-usage claude|codex")
+    try:
+        print(readers[sys.argv[1]]())
+    except (OSError, KeyError, TypeError, ValueError) as e:
+        sys.exit(f"fleet-usage: {sys.argv[1]}: {e}")
+
+
+if __name__ == "__main__":
+    main()
