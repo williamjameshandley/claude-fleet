@@ -602,9 +602,11 @@ def create_rows(rows, have):
             target = shlex.quote("=" + r["session"])
             attach = (f"exec tmux -u set-option -t {target} status off \\; "
                       f"attach-session -t {target}")
+            ssh = ("ssh -x -o ControlMaster=no -o ControlPath=none "
+                   f"-o IdentityAgent={shlex.quote(str(SSH_AGENT_SOCKET))}")
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],
-                 f"exec ssh -t {shlex.quote(host)} "
+                 f"exec {ssh} -t {shlex.quote(host)} "
                  + shlex.quote("exec sh -c " + shlex.quote(attach)),
                  ";", *ident,
                  ";", "set-option", "-w", "-t", f"{fs}:{r['num']}",
@@ -754,9 +756,10 @@ def muster_rows(snap):
     wn = max((len(n) for n in names), default=0)
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
+        title = r["title"] if r["agent"] == "claude" else f"● {r['title']}"
         line = (f"{COLOR[r['state']]}{STATE_ICONS[r['state']]} {name:<{wn + 2}}\033[0m"
-                f"\033[1m{AGENT_ICONS[r['agent']]} {HOST_ICONS[r['host']]}\033[0m "
-                f"\033[2m{Path(r['cwd']).name:<{wc + 1}}\033[0m{r['title']}")
+                f"\033[1m{HOST_ICONS[r['host']]}\033[0m "
+                f"\033[2m{Path(r['cwd']).name:<{wc + 1}}\033[0m{title}")
         out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{line}")
     print("\n".join(out))
 
@@ -792,7 +795,8 @@ def cmd_muster_ui(args):
         "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
         "--header-lines", "3", "--info", "hidden", "--no-scrollbar",
         "--header", "Tab history · c create · r rename · d delete · Enter show",
-        "--preview", f"{exe} peek {{1}} {{2}} | tail -n $FZF_PREVIEW_LINES",
+        "--preview", "tmux capture-pane -ep -t '=fleet@main:{3}' "
+                     "| tail -n $FZF_PREVIEW_LINES",
         "--preview-window", "down,50%,border-top",
         "--bind", f"start:reload({exe} muster --rows)",
         "--bind", "j:down,k:up,u:first,q:ignore",
@@ -859,10 +863,6 @@ def cmd_create(args):
                      "-t", f"=fleet@{selected_screen(args)}:{parts[0]}")
                 return
     sys.exit(f"fleet: {name} on {host} was created but never mustered")
-
-
-def cmd_peek(args):
-    print(tmux(args.host, "capture-pane", "-ep", "-t", args.win), end="")
 
 
 def cmd_up(args):
@@ -1213,7 +1213,6 @@ def main():
     add("muster-ui", cmd_muster_ui)
     add("history", cmd_history, (["-n"], dict(type=int, default=100)))
     add("history-ui", cmd_history_ui)
-    add("peek", cmd_peek, (["host"], dict()), (["win"], dict()))
     add("up", cmd_up)
     add("conn", cmd_conn, (["--arm"], dict(action="store_true")))
     add("switch", cmd_switch, (["target"], dict()))

@@ -36,9 +36,10 @@ writes — there is no default agent.
 
 - **`/usr/bin/fleet`** — **tmux is the fleet**: `fleet@main` is a tmux
   session on the flagship whose windows ARE the agent sessions (linked
-  windows for flagship rows; persistent ssh clients attached directly to
-  ship-side sessions for remote rows), so stepping, jumping, and picking are native
-  tmux commands — nothing external sits in a keypress path. Verbs:
+  windows for flagship rows; persistent non-multiplexed ssh clients attached
+  directly to ship-side sessions for remote rows), so stepping, jumping,
+  previewing, and picking are native tmux commands — nothing external sits in
+  a keypress path. Verbs:
   - `fleet up --screen S` — create the grouped fleet session; `main` also
     owns the single writer window. It owns no agent rows.
   - `fleet muster --write` — the single writer (in `fleet@main:0` under

@@ -81,6 +81,9 @@ class FleetTests(unittest.TestCase):
         command = " ".join(str(x) for x in tmux.call_args.args)
         self.assertIn("set-option -t =email-3 status off", command)
         self.assertIn("attach-session -t =email-3", command)
+        self.assertIn("ControlMaster=no", command)
+        self.assertIn("ControlPath=none", command)
+        self.assertIn("IdentityAgent=", command)
         self.assertNotIn("fleet@w", command)
 
     def test_reconcile_restores_each_grouped_sessions_window_identity(self):
@@ -146,6 +149,8 @@ class FleetTests(unittest.TestCase):
         self.assertIn("Tab history · c create · r rename · d delete · Enter show", argv)
         self.assertTrue(any(arg.startswith("d:execute(") for arg in argv))
         self.assertTrue(any("wait-for -S agent-fleet-focus-main" in arg for arg in argv))
+        self.assertIn("tmux capture-pane -ep -t '=fleet@main:{3}' "
+                      "| tail -n $FZF_PREVIEW_LINES", argv)
 
     def test_history_sort_handles_equal_timestamps(self):
         args = type("Args", (), {"n": 2})()
