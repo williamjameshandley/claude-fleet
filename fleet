@@ -764,14 +764,23 @@ def muster_rows(snap):
 def ensure_muster_tabs():
     fs = "fleet@muster"
     exe = shlex.quote(str(Path(__file__).resolve()))
-    windows = {line.split(" ", 1)[1] for line in
-               tmux(flagship(), "list-windows", "-t", f"={fs}",
-                    "-F", "#{window_index} #{window_name}").splitlines()}
+    windows = {name: index for index, name in
+               (line.split(" ", 1) for line in
+                tmux(flagship(), "list-windows", "-t", f"={fs}",
+                     "-F", "#{window_index} #{window_name}").splitlines())}
     tmux(flagship(), "rename-window", "-t", f"={fs}:0", "live")
-    for index, name in ((1, "manage"), (2, "history")):
-        if name not in windows:
-            tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{index}",
-                 "-n", name, f"exec {exe} {name}-ui")
+    if "manage" in windows:
+        tmux(flagship(), "kill-window", "-t", f"={fs}:{windows['manage']}")
+    windows = {name: index for index, name in
+               (line.split(" ", 1) for line in
+                tmux(flagship(), "list-windows", "-t", f"={fs}",
+                     "-F", "#{window_index} #{window_name}").splitlines())}
+    if "history" not in windows:
+        tmux(flagship(), "new-window", "-d", "-t", f"={fs}:1",
+             "-n", "history", f"exec {exe} history-ui")
+    elif windows["history"] != "1":
+        tmux(flagship(), "move-window", "-d", "-s", f"={fs}:{windows['history']}",
+             "-t", f"={fs}:1")
 
 
 def cmd_muster_ui(args):
@@ -782,6 +791,7 @@ def cmd_muster_ui(args):
         "fzf", "--listen", str(MUSTER_SOCKET), "--ansi", "--no-input",
         "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
         "--header-lines", "3", "--info", "hidden", "--no-scrollbar",
+        "--header", "Tab history · c create · r rename · d delete · Enter show",
         "--preview", f"{exe} peek {{1}} {{2}} | tail -n $FZF_PREVIEW_LINES",
         "--preview-window", "down,50%,border-top",
         "--bind", f"start:reload({exe} muster --rows)",
@@ -791,31 +801,10 @@ def cmd_muster_ui(args):
         "--bind", "btab:execute-silent(tmux previous-window)",
         "--bind", f"r:execute({exe} rename {{3}} \"$(printf 'rename to: ' >&2; "
                    f"read -r n </dev/tty && echo \"$n\")\")+reload({exe} muster --rows)",
-        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}')",
-    ])
-
-
-def cmd_manage_ui(args):
-    os.environ["SSH_AUTH_SOCK"] = str(SSH_AGENT_SOCKET)
-    exe = shlex.quote(str(Path(__file__).resolve()))
-    reload = f"reload({exe} manage)"
-    os.execvp("fzf", [
-        "fzf", "--ansi", "--no-input", "--layout", "reverse",
-        "--delimiter", "\t", "--with-nth", "2,4..", "--info", "hidden",
-        "--no-scrollbar", "--header",
-        "Tab next · c create · r rename · d delete · Enter show",
-        "--preview", f"{exe} peek {{2}} {{3}} | tail -n $FZF_PREVIEW_LINES",
-        "--preview-window", "down,50%,border-top",
-        "--bind", f"start:{reload}",
-        "--bind", "tab:execute-silent(tmux next-window)",
-        "--bind", "btab:execute-silent(tmux previous-window)",
-        "--bind", f"c:execute({exe} create)+{reload}",
-        "--bind", f"r:execute({exe} rename {{1}} \"$(printf 'rename to: ' >&2; "
-                   "read -r n </dev/tty && echo \"$n\")\")+" + reload,
-        "--bind", f"d:execute(if printf 'delete {{4}} on {{2}}? [y/N] ' >&2; "
+        "--bind", f"d:execute(if printf 'delete session? [y/N] ' >&2; "
                    "read -r a </dev/tty && [ \"$a\" = y ]; then "
-                   f"{exe} delete {{1}}; fi)+{reload}",
-        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{1}')",
+                   f"{exe} delete {{3}}; fi)+reload({exe} muster --rows)",
+        "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}')",
     ])
 
 
@@ -1075,13 +1064,6 @@ def cmd_delete(args):
     print(f"deleted {row['session']} on {row['host']}; transcript retained")
 
 
-def cmd_manage(args):
-    for r in manifest()["rows"]:
-        title = " ".join(r["title"].split())
-        print("\t".join((str(r["num"]), r["host"], r["win"], r["session"],
-                         r["agent"], r["state"], r["cwd"], title)))
-
-
 WORDS = {w: i for i, w in enumerate(
     "zero one two three four five six seven eight nine ten eleven twelve "
     "thirteen fourteen fifteen sixteen seventeen eighteen nineteen".split())}
@@ -1228,8 +1210,6 @@ def main():
         (["--color"], dict(action="store_true")),
         (["--rows"], dict(action="store_true")))
     add("muster-ui", cmd_muster_ui)
-    add("manage", cmd_manage)
-    add("manage-ui", cmd_manage_ui)
     add("history", cmd_history, (["-n"], dict(type=int, default=100)))
     add("history-ui", cmd_history_ui)
     add("peek", cmd_peek, (["host"], dict()), (["win"], dict()))

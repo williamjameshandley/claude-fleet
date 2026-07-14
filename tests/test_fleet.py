@@ -138,6 +138,14 @@ class FleetTests(unittest.TestCase):
         self.assertIn(f"start:reload({Path(fleet.__file__).resolve()} history -n 100)",
                       argv)
 
+    def test_live_tab_contains_session_management(self):
+        with patch.object(fleet, "ensure_muster_tabs"), \
+             patch.object(fleet.os, "execvp") as execvp:
+            fleet.cmd_muster_ui(None)
+        argv = execvp.call_args.args[1]
+        self.assertIn("Tab history · c create · r rename · d delete · Enter show", argv)
+        self.assertTrue(any(arg.startswith("d:execute(") for arg in argv))
+
     def test_history_sort_handles_equal_timestamps(self):
         args = type("Args", (), {"n": 2})()
         items = [{"agent": "claude", "session_id": str(i), "mtime": 1,
