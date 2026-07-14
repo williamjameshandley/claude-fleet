@@ -91,8 +91,8 @@ class FleetTests(unittest.TestCase):
         command = " ".join(str(x) for x in tmux.call_args.args)
         self.assertIn("set-option -t =email-3 status off", command)
         self.assertIn("attach-session -t =email-3", command)
-        self.assertIn("ControlMaster=no", command)
-        self.assertIn("ControlPath=none", command)
+        self.assertNotIn("ControlMaster=no", command)
+        self.assertNotIn("ControlPath=none", command)
         self.assertIn("IdentityAgent=", command)
         self.assertNotIn("fleet@w", command)
 

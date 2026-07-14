@@ -609,7 +609,6 @@ def create_rows(rows, have):
                       f"attach-session -t {target}")
             ssh = ("ssh -x -oBatchMode=yes -oConnectTimeout=5 "
                    "-oServerAliveInterval=5 -oServerAliveCountMax=2 "
-                   "-oControlMaster=no -oControlPath=none "
                    f"-o IdentityAgent={shlex.quote(str(SSH_AGENT_SOCKET))}")
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],

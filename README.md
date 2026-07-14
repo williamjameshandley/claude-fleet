@@ -36,7 +36,7 @@ writes — there is no default agent.
 
 - **`/usr/bin/fleet`** — **tmux is the fleet**: `fleet@main` is a tmux
   session on the flagship whose windows ARE the agent sessions (linked
-  windows for flagship rows; persistent non-multiplexed ssh clients attached
+  windows for flagship rows; persistent ControlMaster channels attached
   directly to ship-side sessions for remote rows), so stepping, jumping,
   previewing, and picking are native tmux commands — nothing external sits in
   a keypress path. Verbs:
