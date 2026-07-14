@@ -10,6 +10,21 @@ from . import viewer
 
 
 STATE_ORDER = {"working": 0, "needs-action": 1, "waiting": 2, "finished": 3}
+RESET = "\033[0m"
+STATE_COLOUR = {
+    "working": "\033[32m",
+    "needs-action": "\033[1;31m",
+    "waiting": "\033[33m",
+    "finished": "\033[90m",
+}
+HOST_COLOUR = {
+    "newton": "\033[34m",
+    "lovelace": "\033[35m",
+    "boltzmann": "\033[33m",
+    "turing": "\033[36m",
+    "noether": "\033[32m",
+}
+FZF_COLOUR = "16,fg:-1,bg:-1,fg+:-1,bg+:8,hl:3,hl+:3,info:4,prompt:2,pointer:1,marker:1,spinner:6,header:4,gutter:-1,border:8"
 
 
 def rows(include_header=True):
@@ -38,7 +53,11 @@ def rows(include_header=True):
         description = " ".join(x for x in (agent, summary) if x).strip()
         place = placement.get(session.ref.key, "")
         room = max(8, width - 2 - 1 - 20 - 8 - 4 - 8)
-        visible = (f"{machine(session.ref.server.host):<2} {marker} {session.name:<20.20} "
+        host_colour = HOST_COLOUR.get(session.ref.server.host, "")
+        state_colour = ("\033[31m" if marker == "?" else "\033[90m" if marker == "x"
+                        else STATE_COLOUR[session.state])
+        visible = (f"{host_colour}{machine(session.ref.server.host):<2}{RESET} "
+                   f"{state_colour}{marker}{RESET} {session.name:<20.20} "
                    f"{place:<8.8} {description:<{room}.{room}} {elapsed:>4}")
         print(f"{session.ref.key}\t{visible}")
 
@@ -56,7 +75,8 @@ def muster():
     sock = RUNTIME / "muster.sock"
     sock.unlink(missing_ok=True)
     command = [
-        "fzf", "--listen", str(sock), "--track", "--disabled", "--no-input",
+        "fzf", "--listen", str(sock), "--track", "--disabled", "--no-input", "--ansi",
+        f"--color={FZF_COLOUR}",
         "--no-unicode", "--pointer=>", "--gutter= ",
         "--no-scrollbar", "--no-hscroll",
         "--delimiter=\t", "--with-nth=2..", "--nth=2..", "--id-nth=1",
@@ -98,6 +118,7 @@ def cursor():
 def history():
     command = [
         "fzf", "--track", "--delimiter=\t", "--with-nth=2..",
+        f"--color={FZF_COLOUR}",
         "--nth=2..", "--id-nth=1", "--layout=reverse", "--no-multi",
         "--header=History  Enter resurrect  Tab live",
         "--bind=enter:execute(fleet-next resurrect {1})+reload(fleet-next history-rows)",
