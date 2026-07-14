@@ -54,7 +54,8 @@ def flagship():
 
 
 def run(argv, **kw):
-    return subprocess.run(argv, text=True, capture_output=True, **kw)
+    kw.setdefault("capture_output", True)
+    return subprocess.run(argv, text=True, **kw)
 
 
 def sh(host, script):

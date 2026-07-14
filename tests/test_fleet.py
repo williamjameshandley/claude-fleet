@@ -14,6 +14,12 @@ fleet = importlib.machinery.SourceFileLoader("fleet_test", str(ROOT / "fleet")).
 
 
 class FleetTests(unittest.TestCase):
+    def test_run_allows_interactive_subprocesses(self):
+        with patch.object(fleet.subprocess, "run") as subprocess_run:
+            fleet.run(["fzf"], capture_output=False, stdout=subprocess.PIPE)
+        subprocess_run.assert_called_once_with(
+            ["fzf"], text=True, capture_output=False, stdout=subprocess.PIPE)
+
     def test_merge_orders_working_first_then_recency(self):
         panes = {
             "ship": [
