@@ -24,14 +24,14 @@ MUSTER_SOCKET = RUNTIME / "agent-fleet-muster.sock"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 AGENT_CMDS = {"claude": "claude", "codex": "codex"}
 URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
-AGENT_ICONS = {"claude": "\ue861", "codex": "\ue7cf"}
+AGENT_ICONS = {"claude": "✳", "codex": "●"}
 STATE_ICONS = {"needs-action": "\uf071", "waiting": "\uf252", "working": "\uf013"}
 HOST_ICONS = {
-    "lovelace": "\uf121",
-    "newton": "\uf5d1",
-    "turing": "\uf2db",
-    "boltzmann": "\uf5d2",
-    "noether": "\uf534",
+    "lovelace": "L",
+    "newton": "N",
+    "turing": "T",
+    "boltzmann": "B",
+    "noether": "Œ",
 }
 # Terminal-set titles require #{q:} and shlex; delimiters are not safe.
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
@@ -755,8 +755,8 @@ def muster_rows(snap):
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
         line = (f"{COLOR[r['state']]}{STATE_ICONS[r['state']]} {name:<{wn + 2}}\033[0m"
-                f"\033[2m{AGENT_ICONS[r['agent']]} {HOST_ICONS[r['host']]} "
-                f"{Path(r['cwd']).name:<{wc + 1}}\033[0m{r['title']}")
+                f"\033[1m{AGENT_ICONS[r['agent']]} {HOST_ICONS[r['host']]}\033[0m "
+                f"\033[2m{Path(r['cwd']).name:<{wc + 1}}\033[0m{r['title']}")
         out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{line}")
     print("\n".join(out))
 
