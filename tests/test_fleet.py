@@ -171,6 +171,15 @@ class FleetTests(unittest.TestCase):
                       "| tail -n $FZF_PREVIEW_LINES", argv)
         self.assertTrue(any("muster --cursor" in arg for arg in argv))
 
+    def test_manifest_refreshes_rows_and_preview(self):
+        with patch.object(fleet, "merge", return_value=([], [])), \
+             patch.object(fleet, "reconcile", return_value=False), \
+             patch.object(fleet, "tmux", return_value="1"), \
+             patch.object(fleet, "muster_push") as push, \
+             patch.object(fleet, "manifest", return_value={}):
+            fleet.manifest_write()
+        push.assert_called_once_with("reload(fleet muster --rows)+refresh-preview")
+
     def test_history_sort_handles_equal_timestamps(self):
         args = type("Args", (), {"n": 2})()
         items = [{"agent": "claude", "session_id": str(i), "mtime": 1,

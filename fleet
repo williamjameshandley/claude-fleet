@@ -682,7 +682,7 @@ def manifest_write():
          json.dumps(unreachable), ";", "set-option", "-t", "fleet@main",
          "@fleet_snapshot_ts", str(now), ";", "set-option", "-t", "fleet@main",
          "@fleet_frozen", "1" if frozen else "")
-    muster_push("reload(fleet muster --rows)")
+    muster_push("reload(fleet muster --rows)+refresh-preview")
     return manifest()
 
 
