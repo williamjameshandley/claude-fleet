@@ -615,7 +615,7 @@ def create_rows(rows, have):
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],
                  f"exec {ssh} -t {shlex.quote(host)} "
-                 + "exec sh -c " + shlex.quote(attach),
+                 + shlex.quote("exec sh -c " + shlex.quote(attach)),
                  ";", *ident,
                  ";", "set-option", "-w", "-t", f"{fs}:{r['num']}",
                  "@fleet_src", r["session"])
