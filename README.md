@@ -46,7 +46,8 @@ writes — there is no default agent.
     `watch`): it runs `fleet _poll` on every host in
     `~/.config/agent-fleet/hosts` (ssh aliases; **first line is the
     flagship itself**; the library reads each host's transcripts
-    locally), orders rows by urgency and then transcript-event recency — the
+    locally), orders working rows first and each state by transcript-event
+    recency — the
     fleet window index IS the pennant number, recomputed at cadence and
     meaningful only as displayed; reordering pauses while the conn is
     armed — publishes the manifest entirely as tmux options, and reconciles
@@ -81,7 +82,8 @@ writes — there is no default agent.
   `$XDG_RUNTIME_DIR/agent-fleet-muster.sock`
   (`fleet muster-ui`) fed by `fleet muster --rows`; the poller and
   selection hooks push `reload`/`pos` to its Unix socket, so the
-    cursor tracks stepping at keypress speed. Enter updates `fleet@main` and
+    cursor initially lands at the first waiting row and tracks stepping at
+    keypress speed. Enter updates `fleet@main` and
     signals local launchers to focus their Main window; a live `capture-pane`
     preview shows the row's tail.
   Live also creates, renames, and confirms deletion of its sessions. History

@@ -22,9 +22,9 @@ change; a patch that violates one is wrong even if it works.
   formats render). The one asynchronous exception is a best-effort curl to
   keep the separate fzf cursor aligned after tmux has already moved.
 - **The view is the thing itself.** A fleet window is the real window
-  (linked, flagship rows) or holds a real nested tmux client attached to
-  the real session (ship rows) — never a preview or re-render. The muster's
-  optional row preview may use `capture-pane`; it is not a fleet window.
+  (linked, flagship rows) or holds a real nested tmux client attached over
+  a dedicated ssh connection to the real session (ship rows) — never a
+  preview or re-render. The muster previews that same Fleet window.
 - Modality is tmux's: the conn is a key-table (`bind -T fleet`), the same
   machinery as copy-mode. Multi-screen is multi-client + session groups;
   `client-focus-in` makes the mouse-focused station the default command and
@@ -32,8 +32,9 @@ change; a patch that violates one is wrong even if it works.
 
 ## Composition over implementation
 
-Each job belongs to the existing tool that does it well: `ssh`
-(+ControlMaster) is all transport; agent state comes from the vendor's own
+Each job belongs to the existing tool that does it well: `ssh` is all
+transport (ControlMaster for short commands, dedicated connections for
+persistent views); agent state comes from the vendor's own
 registry, transcripts, and pane title, never lifecycle hooks; `pacman` deploys;
 systemd user units run what must persist without a terminal. What remains in
 `fleet` is glue only — the state reader, the cross-host merge/numbering

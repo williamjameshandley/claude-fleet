@@ -35,7 +35,7 @@ def claude():
         "https://api.anthropic.com/api/oauth/usage",
         headers={"Authorization": f"Bearer {auth['claudeAiOauth']['accessToken']}",
                  "anthropic-beta": "oauth-2025-04-20"})
-    limits = json.load(urllib.request.urlopen(req))["limits"]
+    limits = json.load(urllib.request.urlopen(req, timeout=10))["limits"]
     fields = {}
     for limit in limits:
         if limit["kind"] == "session":
@@ -52,7 +52,7 @@ def claude():
 
 
 def codex():
-    accounts = json.load(urllib.request.urlopen(f"{PROXY}/auth/accounts"))["accounts"]
+    accounts = json.load(urllib.request.urlopen(f"{PROXY}/auth/accounts", timeout=10))["accounts"]
     accounts = [a for a in accounts if a["status"] == "active" and a.get("quota")]
     if len(accounts) != 1:
         raise ValueError(f"expected one active cached Codex quota, got {len(accounts)}")

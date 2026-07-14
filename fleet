@@ -23,7 +23,8 @@ USAGE_CADENCE = 300
 MUSTER_SOCKET = RUNTIME / "agent-fleet-muster.sock"
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 AGENT_CMDS = {"claude": "claude", "codex": "codex"}
-URGENCY = {"needs-action": 0, "waiting": 1, "working": 2}
+PRIORITY = {"needs-action": 0, "waiting": 1, "working": 2}
+ORDER = {"working": 0, "needs-action": 1, "waiting": 2}
 AGENT_ICONS = {"claude": "✳", "codex": "●"}
 STATE_ICONS = {"needs-action": "\uf071", "waiting": "\uf252", "working": "\uf013"}
 HOST_ICONS = {
@@ -37,6 +38,8 @@ HOST_ICONS = {
 PANE_FMT = ("#{q:session_name} #{q:window_id} #{window_index} #{q:pane_id} "
             "#{pane_pid} #{q:pane_current_command} "
             "#{q:pane_current_path} #{q:pane_title}")
+SSH = ["ssh", "-oBatchMode=yes", "-oConnectTimeout=3",
+       "-oServerAliveInterval=3", "-oServerAliveCountMax=1"]
 
 
 def hosts():
@@ -56,7 +59,7 @@ def run(argv, **kw):
 
 def sh(host, script):
     argv = (["sh", "-c", script] if host == flagship()
-            else ["ssh", host, "sh -c " + shlex.quote(script)])
+            else [*SSH, host, "sh -c " + shlex.quote(script)])
     r = run(argv)
     if r.stderr:
         print(r.stderr, end="", file=sys.stderr)
@@ -68,7 +71,7 @@ def tmux(host, *args):
     if host != flagship():
         # A remote zsh expands tmux's =targets.
         cmd = "tmux " + " ".join(shlex.quote(a) for a in args)
-        argv = ["ssh", host, "sh -c " + shlex.quote(cmd)]
+        argv = [*SSH, host, "sh -c " + shlex.quote(cmd)]
     r = run(argv)
     if r.returncode != 0:
         sys.exit(f"fleet: tmux {' '.join(args)} on {host}: {r.stderr.strip()}")
@@ -94,7 +97,7 @@ def tmux_batched(host, cmds):
 def absent(host, name):
     argv = ["tmux", "has-session", "-t", f"={name}"]
     if host != flagship():
-        argv = ["ssh", host, "tmux has-session -t " + shlex.quote(f"={name}")]
+        argv = [*SSH, host, "tmux has-session -t " + shlex.quote(f"={name}")]
     r = run(argv)
     if not r.returncode:
         return False
@@ -107,10 +110,8 @@ def absent(host, name):
 def muster_push(action):
     if not MUSTER_SOCKET.exists():
         return
-    r = run(["curl", "--silent", "--show-error", "--unix-socket",
-             str(MUSTER_SOCKET), "-X", "POST", "-d", action, "http://localhost"])
-    if r.returncode and MUSTER_SOCKET.exists():
-        sys.exit(f"fleet: muster socket: {r.stderr.strip()}")
+    run(["curl", "--silent", "--show-error", "--max-time", ".2", "--unix-socket",
+         str(MUSTER_SOCKET), "-X", "POST", "-d", action, "http://localhost"])
 
 
 def check_screen(screen):
@@ -447,8 +448,12 @@ def cmd_poll(args):
 
 
 def poll(host):
-    argv = ["fleet", "_poll"] if host == flagship() else ["ssh", host, "fleet _poll"]
-    r = run(argv)
+    argv = ["fleet", "_poll"] if host == flagship() else [*SSH, host, "fleet _poll"]
+    try:
+        r = run(argv, timeout=10)
+    except subprocess.TimeoutExpired:
+        print(f"fleet: _poll on {host} timed out", file=sys.stderr)
+        return None
     if r.stderr:
         print(r.stderr, end="", file=sys.stderr)
     if r.returncode:
@@ -478,10 +483,10 @@ def merge():
         g["session_id"] = ""
         g["ts"] = max(g["ts"], p["ts"])
         g["pane_id"] = None
-        if URGENCY[p["state"]] < URGENCY[g["state"]]:
+        if PRIORITY[p["state"]] < PRIORITY[g["state"]]:
             g.update(state=p["state"], cwd=p["cwd"], title=p["title"],
                      agent=p["agent"])
-    ordered = sorted(rows.values(), key=lambda r: (URGENCY[r["state"]], -r["ts"]))
+    ordered = sorted(rows.values(), key=lambda r: (ORDER[r["state"]], -r["ts"]))
     return ordered, unreachable
 
 
@@ -602,7 +607,9 @@ def create_rows(rows, have):
             target = shlex.quote("=" + r["session"])
             attach = (f"exec tmux -u set-option -t {target} status off \\; "
                       f"attach-session -t {target}")
-            ssh = ("ssh -x -o ControlMaster=no -o ControlPath=none "
+            ssh = ("ssh -x -oBatchMode=yes -oConnectTimeout=5 "
+                   "-oServerAliveInterval=5 -oServerAliveCountMax=2 "
+                   "-oControlMaster=no -oControlPath=none "
                    f"-o IdentityAgent={shlex.quote(str(SSH_AGENT_SOCKET))}")
             tmux(flagship(), "new-window", "-d", "-t", f"={fs}:{r['num']}",
                  "-n", r["session"],
@@ -718,6 +725,11 @@ def cmd_muster(args):
         snap = manifest()
     if args.rows:
         return muster_rows(snap)
+    if args.cursor:
+        waiting = next((i for i, r in enumerate(snap["rows"], 1)
+                        if r["state"] == "waiting"), 1)
+        print(f"pos({len(snap['unreachable']) + waiting})")
+        return
     c = (lambda code, s: f"{code}{s}\033[0m") if args.color else (lambda code, s: s)
     cur = tuple(shlex.split(tmux(flagship(), "display", "-p", "-t", "=fleet@main:",
                                  "#{q:@fleet_host} #{q:@fleet_win}")))
@@ -743,11 +755,11 @@ def muster_rows(snap):
     stamp = time.strftime('%H:%M:%S', time.localtime(snap['snapshot_ts']))
     if snap["frozen"]:
         stamp += "  \033[35mCONN — ordering held\033[0m"
-    out = [f"-\t-\t-\t\033[2m{stamp}\033[0m",
-           f"-\t-\t-\t{AGENT_ICONS['claude']} {snap['claude_usage']}",
-           f"-\t-\t-\t{AGENT_ICONS['codex']} {snap['codex_usage']}"]
+    out = [f"-\t-\t-\t-\t\033[2m{stamp}\033[0m",
+           f"-\t-\t-\t-\t{AGENT_ICONS['claude']} {snap['claude_usage']}",
+           f"-\t-\t-\t-\t{AGENT_ICONS['codex']} {snap['codex_usage']}"]
     for host in snap["unreachable"]:
-        out.append(f"{host}\t-\t-\t\033[1;31m{host} unreachable\033[0m")
+        out.append(f"{host}\t-\t-\t-\t\033[1;31m{host} unreachable\033[0m")
     rows = snap["rows"]
     per_sess = Counter((r["host"], r["session"]) for r in rows)
     names = [(r["session"] if per_sess[(r["host"], r["session"])] == 1
@@ -756,11 +768,16 @@ def muster_rows(snap):
     wn = max((len(n) for n in names), default=0)
     wc = max((len(Path(r["cwd"]).name) for r in rows), default=0)
     for r, name in zip(rows, names):
-        title = r["title"] if r["agent"] == "claude" else f"● {r['title']}"
+        title = r["title"]
+        if r["agent"] == "claude":
+            title = "✳ " + re.sub(r"^[✳\u2800-\u28ff]\s*", "", title)
+        else:
+            title = "● " + title
         line = (f"{COLOR[r['state']]}{STATE_ICONS[r['state']]} {name:<{wn + 2}}\033[0m"
                 f"\033[1m{HOST_ICONS[r['host']]}\033[0m "
                 f"\033[2m{Path(r['cwd']).name:<{wc + 1}}\033[0m{title}")
-        out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{line}")
+        target = f"{r['host']}:{r['session']}"
+        out.append(f"{r['host']}\t{r['win']}\t{r['num']}\t{target}\t{line}")
     print("\n".join(out))
 
 
@@ -772,12 +789,6 @@ def ensure_muster_tabs():
                 tmux(flagship(), "list-windows", "-t", f"={fs}",
                      "-F", "#{window_index} #{window_name}").splitlines())}
     tmux(flagship(), "rename-window", "-t", f"={fs}:0", "live")
-    if "manage" in windows:
-        tmux(flagship(), "kill-window", "-t", f"={fs}:{windows['manage']}")
-    windows = {name: index for index, name in
-               (line.split(" ", 1) for line in
-                tmux(flagship(), "list-windows", "-t", f"={fs}",
-                     "-F", "#{window_index} #{window_name}").splitlines())}
     if "history" not in windows:
         tmux(flagship(), "new-window", "-d", "-t", f"={fs}:1",
              "-n", "history", f"exec {exe} history-ui")
@@ -792,22 +803,23 @@ def cmd_muster_ui(args):
     exe = shlex.quote(str(Path(__file__).resolve()))
     os.execvp("fzf", [
         "fzf", "--listen", str(MUSTER_SOCKET), "--ansi", "--no-input",
-        "--layout", "reverse", "--delimiter", "\t", "--with-nth", "4..",
+        "--layout", "reverse", "--delimiter", "\t", "--with-nth", "5..",
         "--header-lines", "3", "--info", "hidden", "--no-scrollbar",
         "--header", "Tab history · c create · r rename · d delete · Enter show",
         "--preview", "tmux capture-pane -ep -t '=fleet@main:{3}' "
                      "| tail -n $FZF_PREVIEW_LINES",
         "--preview-window", "down,50%,border-top",
         "--bind", f"start:reload({exe} muster --rows)",
+        "--bind", f"load:transform({exe} muster --cursor)+unbind(load)",
         "--bind", "j:down,k:up,u:first,q:ignore",
         "--bind", f"c:execute({exe} create)",
         "--bind", "tab:execute-silent(tmux next-window)",
         "--bind", "btab:execute-silent(tmux previous-window)",
-        "--bind", f"r:execute({exe} rename {{3}} \"$(printf 'rename to: ' >&2; "
+        "--bind", f"r:execute({exe} rename {{4}} \"$(printf 'rename to: ' >&2; "
                    f"read -r n </dev/tty && echo \"$n\")\")+reload({exe} muster --rows)",
-        "--bind", f"d:execute(if printf 'delete session? [y/N] ' >&2; "
+        "--bind", f"d:execute(if printf 'delete {{4}}? [y/N] ' >&2; "
                    "read -r a </dev/tty && [ \"$a\" = y ]; then "
-                   f"{exe} delete {{3}}; fi)+reload({exe} muster --rows)",
+                   f"{exe} delete {{4}}; fi)+reload({exe} muster --rows)",
         "--bind", "enter:execute-silent(tmux select-window -t '=fleet@main:{3}' "
                   "\\; wait-for -S agent-fleet-focus-main)",
     ])
@@ -821,7 +833,7 @@ def cmd_history_ui(args):
         "fzf", "--ansi", "--no-input", "--layout", "reverse",
         "--delimiter", "\t", "--with-nth", "1,3..", "--info", "hidden",
         "--no-scrollbar", "--header", "Shift-Tab previous · Enter resurrect",
-        "--preview", "ssh {1} fleet latest {2} --agent {3} -n 3",
+        "--preview", " ".join(SSH) + " {1} fleet latest {2} --agent {3} -n 3",
         "--preview-window", "down,50%,border-top",
         "--bind", f"start:{reload}",
         "--bind", "tab:execute-silent(tmux next-window)",
@@ -995,8 +1007,13 @@ def cmd_conn(args):
 
 def resolve(snap, target):
     rows = snap["rows"]
-    matches = ([r for r in rows if r["num"] == int(target)] if target.isdigit()
-               else [r for r in rows if r["session"] == target])
+    if ":" in target:
+        host, session = target.split(":", 1)
+        matches = [r for r in rows if r["host"] == host and r["session"] == session]
+    elif target.isdigit():
+        matches = [r for r in rows if r["num"] == int(target)]
+    else:
+        matches = [r for r in rows if r["session"] == target]
     if not matches:
         sys.exit(f"fleet: no session matches {target!r}")
     if len(matches) > 1:
@@ -1092,7 +1109,7 @@ def llm_resolve(utterance, snap):
                  f"endpoint is configured ({cfg})")
     base = cfg.read_text().strip()
     try:
-        model = json.load(urllib.request.urlopen(f"{base}/models"))["data"][0]["id"]
+        model = json.load(urllib.request.urlopen(f"{base}/models", timeout=10))["data"][0]["id"]
     except OSError as e:
         sys.exit(f"fleet: LLM endpoint {base} unreachable: {e}")
     except (KeyError, IndexError, ValueError) as e:
@@ -1117,7 +1134,7 @@ def llm_resolve(utterance, snap):
         json.dumps(dict(model=model, messages=[dict(role="user", content=prompt)])).encode(),
         {"Content-Type": "application/json"})
     try:
-        text = json.load(urllib.request.urlopen(req))["choices"][0]["message"]["content"]
+        text = json.load(urllib.request.urlopen(req, timeout=30))["choices"][0]["message"]["content"]
         verdict = json.loads(text)
     except OSError as e:
         sys.exit(f"fleet: LLM call failed: {e}")
@@ -1209,7 +1226,8 @@ def main():
 
     add("muster", cmd_muster, (["--write"], dict(action="store_true")),
         (["--color"], dict(action="store_true")),
-        (["--rows"], dict(action="store_true")))
+        (["--rows"], dict(action="store_true")),
+        (["--cursor"], dict(action="store_true")))
     add("muster-ui", cmd_muster_ui)
     add("history", cmd_history, (["-n"], dict(type=int, default=100)))
     add("history-ui", cmd_history_ui)

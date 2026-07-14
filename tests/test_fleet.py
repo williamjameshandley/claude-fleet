@@ -14,7 +14,7 @@ fleet = importlib.machinery.SourceFileLoader("fleet_test", str(ROOT / "fleet")).
 
 
 class FleetTests(unittest.TestCase):
-    def test_merge_orders_urgency_then_recency(self):
+    def test_merge_orders_working_first_then_recency(self):
         panes = {
             "ship": [
                 dict(session="a", win="@1", window=0, pane_id="%1", agent="codex",
@@ -28,7 +28,7 @@ class FleetTests(unittest.TestCase):
         with patch.object(fleet, "hosts", return_value=["ship"]), \
              patch.object(fleet, "poll", side_effect=lambda host: panes[host]):
             rows, unreachable = fleet.merge()
-        self.assertEqual([r["session"] for r in rows], ["c", "b", "a"])
+        self.assertEqual([r["session"] for r in rows], ["a", "c", "b"])
         self.assertEqual(unreachable, [])
 
     def test_merge_uses_most_urgent_pane(self):
@@ -51,6 +51,16 @@ class FleetTests(unittest.TestCase):
              patch.object(fleet, "run", return_value=failed):
             with self.assertRaises(SystemExit):
                 fleet.absent("ship", "work")
+
+    def test_poll_timeout_marks_only_that_host_unreachable(self):
+        with patch.object(fleet, "flagship", return_value="flag"), \
+             patch.object(fleet, "run", side_effect=subprocess.TimeoutExpired([], 10)):
+            self.assertIsNone(fleet.poll("ship"))
+
+    def test_host_session_target_survives_reordering(self):
+        rows = [dict(num=1, host="newton", session="work"),
+                dict(num=2, host="lovelace", session="work")]
+        self.assertEqual(fleet.resolve({"rows": rows}, "newton:work"), rows[0])
 
     def test_ordering_freeze_is_limited_to_fleet_clients(self):
         with patch.object(fleet, "flagship", return_value="flag"), \
@@ -151,6 +161,7 @@ class FleetTests(unittest.TestCase):
         self.assertTrue(any("wait-for -S agent-fleet-focus-main" in arg for arg in argv))
         self.assertIn("tmux capture-pane -ep -t '=fleet@main:{3}' "
                       "| tail -n $FZF_PREVIEW_LINES", argv)
+        self.assertTrue(any("muster --cursor" in arg for arg in argv))
 
     def test_history_sort_handles_equal_timestamps(self):
         args = type("Args", (), {"n": 2})()
