@@ -179,7 +179,7 @@ class FleetTests(unittest.TestCase):
              patch.object(fleet, "muster_push") as push, \
              patch.object(fleet, "manifest", return_value={}):
             fleet.manifest_write()
-        push.assert_called_once_with("reload(fleet muster --rows)+refresh-preview")
+        push.assert_called_once_with("reload-sync(fleet muster --rows)+refresh-preview")
 
     def test_history_sort_handles_equal_timestamps(self):
         args = type("Args", (), {"n": 2})()

@@ -20,6 +20,7 @@ CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "age
 RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"))
 SSH_AGENT_SOCKET = RUNTIME / "gnupg/S.gpg-agent.ssh"
 CADENCE = 2
+POLL_CADENCE = 1
 USAGE_CADENCE = 900
 MUSTER_SOCKET = RUNTIME / "agent-fleet-muster.sock"
 RECONCILE_LOCK = "agent-fleet-reconcile"
@@ -692,7 +693,7 @@ def manifest_write():
          json.dumps(unreachable), ";", "set-option", "-t", "fleet@main",
          "@fleet_snapshot_ts", str(now), ";", "set-option", "-t", "fleet@main",
          "@fleet_frozen", "1" if frozen else "")
-    muster_push("reload(fleet muster --rows)+refresh-preview")
+    muster_push("reload-sync(fleet muster --rows)+refresh-preview")
     return manifest()
 
 
@@ -894,7 +895,7 @@ def cmd_up(args):
     screen = check_screen(args.screen or "main")
     fs = f"fleet@{screen}"
     watch = (f"env SSH_AUTH_SOCK={shlex.quote(str(SSH_AGENT_SOCKET))} "
-             "watch -t -c fleet muster --color --write")
+             f"watch -n {POLL_CADENCE} -t -c fleet muster --color --write")
     if absent(flagship(), fs):
         if screen == "main":
             tmux(flagship(), "new-session", "-d", "-s", fs, "-n", "muster", watch)
