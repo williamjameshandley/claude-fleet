@@ -83,7 +83,7 @@ class Fleet:
         if not path.exists():
             return
         process = await asyncio.create_subprocess_exec(
-            "curl", "-fsS", "--max-time", ".2", "--unix-socket", str(path),
+            "curl", "-fsS", "--max-time", "2", "--unix-socket", str(path),
             "-XPOST", "-d", "reload-sync(fleet-next items)+transform-header(fleet-next header)",
             "http://localhost",
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
