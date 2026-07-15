@@ -103,6 +103,19 @@ status and metadata, reading full Claude/Codex transcripts on demand when a
 request requires deeper context. Future mdgtd context may propose start-of-day
 work.
 
+Commander is one lifelong personal-assistant identity, not one conversation per
+workstation, day or model vendor. Claude and Codex are interchangeable execution
+backends which the user explicitly selects; changing backend does not start a
+new Commander history.
+
+An optional future Alan memory layer may make Commander feel like an infinite
+conversation despite finite model windows. Recent dialogue would remain
+verbatim, older dialogue would be represented by progressively coarser
+summaries, and immutable raw vendor JSONL would remain the lossless source.
+Compaction must never rewrite raw history, and summaries and indexes remain
+rebuildable projections. This is not a dependency of the first Commander: it
+uses an ordinary persistent Codex or Claude conversation.
+
 Conversation discovery and retrieval are composable Python packages, not MCP
 servers. They provide direct APIs for locating, filtering, searching and reading
 Claude and Codex JSONL histories across machines, with thin Unix CLI adapters
