@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -36,10 +37,15 @@ def edit(draft, raw, instruction=None, context=None):
         schema = Path(directory) / "schema.json"
         output = Path(directory) / "output.json"
         schema.write_text(json.dumps(SCHEMA))
-        subprocess.run(
+        environment = os.environ | {"CODEX_API_KEY": os.environ["OPENAI_API_KEY"]}
+        result = subprocess.run(
             ["codex", "exec", "--ephemeral", "--sandbox", "read-only",
-             "--skip-git-repo-check", "--output-schema", str(schema),
+             "--ignore-user-config", "--ignore-rules", "--skip-git-repo-check",
+             "--output-schema", str(schema),
              "--output-last-message", str(output), task],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            text=True,
         )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip().splitlines()[-1])
         return json.loads(output.read_text())
