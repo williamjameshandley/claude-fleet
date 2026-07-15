@@ -47,7 +47,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_commander_uses_native_codex(self):
         launcher = (Path(__file__).parents[1] / "fleet-commander").read_text()
-        self.assertIn("exec codex", launcher)
+        self.assertIn("codex --sandbox danger-full-access resume commander", launcher)
+        self.assertIn('"$1" = restart', launcher)
         self.assertNotIn("fleet-next commander\"", launcher)
 
     def test_viewer_dismiss_is_an_explicit_clear(self):
