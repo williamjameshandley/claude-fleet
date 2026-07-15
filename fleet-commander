@@ -1,2 +1,5 @@
 #!/bin/sh
+if [ "$(hostname -s)" != lovelace ]; then
+    exec ssh -tt -o BatchMode=yes lovelace fleet-commander
+fi
 exec tmux -u new-session -A -s fleet@commander "exec fleet-next commander"
