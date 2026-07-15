@@ -47,7 +47,8 @@ class IdentityTests(unittest.TestCase):
 
     def test_commander_uses_native_codex(self):
         launcher = (Path(__file__).parents[1] / "fleet-commander").read_text()
-        self.assertIn("codex --sandbox danger-full-access resume commander", launcher)
+        self.assertIn('.thread_name == "commander"', launcher)
+        self.assertIn("codex --sandbox danger-full-access resume $id", launcher)
         self.assertIn('"$1" = restart', launcher)
         self.assertNotIn("fleet-next commander\"", launcher)
 
