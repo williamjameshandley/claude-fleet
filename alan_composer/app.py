@@ -13,7 +13,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from .archive import Archive, ROOT
-from .audio import Capture, RATE, Segmenter
+from .audio import Capture, RATE, Segmenter, WakeDetector
 from . import delivery, destination
 from .editor import edit
 from .model import Composition, Mode, classify
@@ -31,25 +31,39 @@ class Composer:
         self.transcriber = Transcriber()
         self.pool = ThreadPoolExecutor(max_workers=3)
         self.pending = {}
+        self.opening_from_wake = False
         self.segmenter = Segmenter(self._segment)
         self.window, self.entry, self.status, self.target, self.activity = self._window()
         self.entry.connect("changed", self._entry_changed)
-        self.capture = Capture(ROOT / "ambient", self.segmenter.feed)
+        self.wake = None
+        self.capture = Capture(ROOT / "ambient", self._audio)
+        if model := os.environ.get("ALAN_WAKE_MODEL"):
+            self.wake = WakeDetector(model, self._wake)
 
     def start(self):
         self.capture.start()
         threading.Thread(target=self._serve, daemon=True).start()
         Gtk.main()
 
-    def open(self):
+    def open(self, preroll=(), wake=False):
         if self.composition:
             return
         self.composition = Composition(destination=destination.capture())
-        self.segmenter.enabled = True
+        self.opening_from_wake = wake
+        self.segmenter.start(preroll)
         self.entry.set_text("")
+        self.activity.set_text("")
         self._show("LISTENING", "Opened")
         self.archive.record(self.composition, "opened",
                             destination=self._destination_data())
+
+    def _audio(self, block):
+        self.segmenter.feed(block)
+        if self.wake and not self.composition:
+            self.wake.feed(block)
+
+    def _wake(self):
+        GLib.idle_add(self.open, self.capture.preroll(), True)
 
     def _segment(self, audio):
         if not self.composition or self.composition.mode is not Mode.RECORDING:
@@ -58,7 +72,9 @@ class Composer:
         self.composition = replace(current, queued=current.queued + 1)
         token = object()
         path = self.archive.audio(current, audio, RATE)
-        self.pending[token] = (current, audio, str(path))
+        opening = self.opening_from_wake
+        self.opening_from_wake = False
+        self.pending[token] = (current, audio, str(path), opening)
         self.archive.record(current, "utterance", audio=str(path))
         GLib.idle_add(self._render_status, "TRANSCRIBING")
         self.pool.submit(self._transcribe, token, current.id, audio)
@@ -79,7 +95,7 @@ class Composer:
                                     audio=pending[2])
             return False
         self.composition = replace(self.composition, queued=self.composition.queued - 1)
-        kind, value = classify(raw)
+        kind, value = classify(raw, opening=pending[3])
         self.archive.record(self.composition, "transcribed", raw=raw, kind=kind)
         if kind == "control":
             self._control(value)
@@ -127,11 +143,11 @@ class Composer:
     def _control(self, command):
         if command == "pause":
             self.composition = self.composition.pause()
-            self.segmenter.enabled = False
+            self.segmenter.stop()
             self._render_status("PAUSED")
         elif command == "resume":
             self.composition = self.composition.resume()
-            self.segmenter.enabled = True
+            self.segmenter.start()
             self._render_status("LISTENING")
         elif command == "cancel":
             self._close("cancelled")
@@ -157,7 +173,9 @@ class Composer:
             self.archive.record(self.composition, outcome, draft=self.entry.get_text(),
                                 destination=self._destination_data())
         self.composition = None
-        self.segmenter.enabled = False
+        self.segmenter.stop()
+        if self.wake:
+            self.wake.reset()
         self.window.hide()
 
     def _window(self):
@@ -173,9 +191,10 @@ class Composer:
         target = Gtk.Label(label="NO DESTINATION")
         entry = Gtk.Entry()
         entry.set_hexpand(True)
-        activity = Gtk.Label(label="")
+        activity = Gtk.Entry()
+        activity.set_editable(False)
+        activity.set_can_focus(False)
         activity.set_width_chars(38)
-        activity.set_xalign(0)
         box.pack_start(status, False, False, 6)
         box.pack_start(target, False, False, 0)
         box.pack_start(entry, True, True, 0)
@@ -230,7 +249,9 @@ class Composer:
         return False
 
     def _log(self, message):
-        self.activity.set_text(message)
+        history = self.activity.get_text()
+        self.activity.set_text(f"{history}  ·  {message}" if history else message)
+        self.activity.set_position(-1)
         return False
 
     def _highlight(self, before, after):
