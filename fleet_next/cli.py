@@ -10,6 +10,7 @@ from .protocol import encode
 from .quota import read as quota_read, update as quota_update
 from .tmux import capture, event_stream, inventory, mutate
 from .config import RUNTIME, hosts
+from .transcripts import history as transcript_history, resume
 
 
 def events(args):
@@ -60,6 +61,12 @@ def main():
     command("muster", lambda _: ui.muster())
     command("history-ui", lambda _: ui.history())
     command("history-rows", lambda _: actions.history())
+    item = command("transcripts", lambda a: print(json.dumps(transcript_history(a.limit))))
+    item.add_argument("--limit", type=int, default=100)
+    item = command("resume", lambda a: resume(a.agent, a.session, a.name))
+    item.add_argument("agent", choices=("claude", "codex"))
+    item.add_argument("session")
+    item.add_argument("name")
     item = command("resurrect", lambda a: actions.resurrect(a.key))
     item.add_argument("key")
     item = command("arrive", lambda a: actions.arrive(a.profile, a.available))

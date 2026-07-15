@@ -10,17 +10,12 @@ from .daemon import preview as pane_preview, snapshot
 from .protocol import decode
 from .protocol import decode_message
 from . import viewer
-from .agent import LEGACY
 
 
 def host_command(host, *command, capture_output=False):
     argv = list(command) if host == os.uname().nodename else [
         "ssh", "-T", "-o", "BatchMode=yes", host, shlex.join(command)]
     return subprocess.run(argv, text=True, check=True, capture_output=capture_output)
-
-
-def legacy(host):
-    return str(LEGACY) if host == os.uname().nodename else "/usr/lib/agent-fleet/fleet-legacy"
 
 
 def choose(values, prompt):
@@ -81,7 +76,8 @@ def history():
             for session in decode(snapshot()) if session.transcript_id}
     rows = []
     for host in hosts():
-        result = host_command(host, legacy(host), "_history", "-n", "100", capture_output=True)
+        result = host_command(host, "fleet-next", "transcripts", "--limit", "100",
+                              capture_output=True)
         for item in json.loads(result.stdout):
             if (host, item["agent"], item["session_id"]) not in live:
                 rows.append((item["mtime"], host, item))
@@ -98,7 +94,7 @@ def resurrect(key):
     name = input("new session name: ").strip()
     if not name:
         raise SystemExit("session name is required")
-    host_command(host, legacy(host), "_resurrect", agent, transcript, name)
+    host_command(host, "fleet-next", "resume", agent, transcript, name)
 
 
 def arrive(profile, available=False):

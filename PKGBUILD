@@ -1,6 +1,6 @@
 # Maintainer: Will Handley <wh260@cam.ac.uk>
 pkgname=agent-fleet
-pkgver=0.2.0.r92
+pkgver=0.2.0.r100.d5791a713
 pkgrel=1
 pkgdesc='Awareness and one-keypress switching for a fleet of terminal AI-agent sessions in tmux'
 arch=('x86_64')
@@ -30,8 +30,8 @@ pkgver() {
   if git diff --quiet && git diff --cached --quiet; then
     printf '%s\n' "$version"
   else
-    hash=$(sha256sum fleet fleet-next fleet-preview.c fleet-muster fleet-viewer fleet-view \
-      fleet-deck fleet-office fleet-commander fleet_next/*.py fleet-usage tmux.conf \
+    hash=$(sha256sum fleet-next fleet-preview.c fleet-muster fleet-viewer fleet-view \
+      fleet-deck fleet-office fleet-commander fleet_next/*.py fleet-usage \
       fleet-next.service fleet-quota.service fleet-quota.timer \
       wake-dryrun wake-dryrun.service alan-composer alan-composer.service \
       alan_composer/*.py LICENSE \
@@ -41,12 +41,12 @@ pkgver() {
 }
 
 package() {
-  install -Dm755 "$startdir/fleet" "$pkgdir/usr/lib/agent-fleet/fleet-legacy"
   install -Dm755 "$startdir/fleet-next" "$pkgdir/usr/bin/fleet-next"
   for script in fleet-muster fleet-viewer fleet-view fleet-deck fleet-office fleet-commander; do
     install -Dm755 "$startdir/$script" "$pkgdir/usr/bin/$script"
   done
   install -Dm755 "$startdir/fleet-usage" "$pkgdir/usr/bin/fleet-usage"
+  install -d "$pkgdir/usr/lib/agent-fleet"
   cc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Werror \
     "$startdir/fleet-preview.c" -o "$pkgdir/usr/lib/agent-fleet/fleet-preview" -lvterm
   local purelib="$pkgdir$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
@@ -54,7 +54,6 @@ package() {
   install -m644 "$startdir"/fleet_next/*.py "$purelib/fleet_next/"
   install -d "$purelib/alan_composer"
   install -m644 "$startdir"/alan_composer/*.py "$purelib/alan_composer/"
-  install -Dm644 "$startdir/tmux.conf" "$pkgdir/usr/share/agent-fleet/tmux.conf"
   install -Dm755 "$startdir/wake-dryrun" "$pkgdir/usr/lib/agent-fleet/wake-dryrun"
   install -Dm644 "$startdir/wake-dryrun.service" "$pkgdir/usr/lib/systemd/user/wake-dryrun.service"
   install -Dm755 "$startdir/alan-composer" "$pkgdir/usr/bin/alan-composer"

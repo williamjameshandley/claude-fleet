@@ -16,8 +16,12 @@ machines, operable with one hand and eventually none.
 
 ## Safety and spatial behavior
 
-- Fleet exposes no delete or purge and never invokes `kill-session`,
-  `kill-window` or `unlink-window`.
+- Fleet never invokes `kill-window` or `unlink-window`, and never destroys a
+  session implicitly. Explicit user-approved archive records the vendor
+  conversation identity in recoverable History before closing the live tmux
+  session, and refuses to close if resurrection cannot be established. Restore
+  resumes the full vendor conversation rather than requesting compression.
+  There is no permanent purge.
 - Dismiss affects only a viewer. Rename and create target revalidated source
   identities. Transcript resurrection creates a new source session.
 - Existing occupied deck slots do not move or get reclaimed automatically.
@@ -48,3 +52,8 @@ is specified in `VOICE_COMPOSER.md`: speech edits a visible draft and only the
 local `Alan, send` control sends its visible snapshot and presses Enter. The
 composer archives recoverable state but never becomes tmux topology authority.
 mdgtd and shared keyboard/mouse control remain later integrations.
+
+Commander transcript search is a composable Python API over Claude and Codex
+JSONL, optionally exposed by thin CLI commands. Do not introduce MCP servers or
+a bespoke tool protocol; this repository follows the post-MCP approach used by
+Alan Home and Alan Work.

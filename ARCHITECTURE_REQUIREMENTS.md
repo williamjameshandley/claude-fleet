@@ -17,8 +17,16 @@ a row drops into the real session for keyboard, mouse or voice input.
 - Visibility is evidence of an open loop, not a separate truth. `done` shelves
   attention without destroying the source. Displacement lowers salience but
   does not close a loop.
-- Automation is conservative: it may suggest or fill empty capacity, never
-  destroy or silently reorganize occupied work. There is no purge concept.
+- User-facing deletion means archiving a conversation: preserve its vendor
+  conversation identity in History, close its live agent/tmux session, and
+  remove it from Muster. Archive is recoverable, but does not keep thousands of
+  dormant sessions running. There is no permanent purge operation.
+- Automation is conservative: it never fills blank capacity merely because it
+  exists, and never destroys or silently reorganizes occupied work. When asked
+  to add work, Commander uses recency, activity, conversation history and open
+  loops to rank likely candidates. Broad requests such as "add some more"
+  produce a concrete proposed set and placement plan; Commander waits for
+  approval before applying it. There is no purge concept.
 
 ## Interaction
 
@@ -26,12 +34,32 @@ a row drops into the real session for keyboard, mouse or voice input.
   Selecting another row explicitly replaces that sole viewer attachment.
 - Multi-screen: focus an already visible source, otherwise use a free fixed
   slot. At full capacity, refuse implicit replacement and ask for a destination.
+- A station may remain visibly blank until the user asks Commander to populate
+  it. Blank capacity is not represented by creating or destroying source tmux
+  sessions.
 - Muster supports keyboard and mouse selection, filtering, aligned compact
   status, usage, management and history. Working work is at the top; initial
   focus is the first waiting row.
 - Create and rename mutate real tmux sessions. Dismiss mutates only a viewer.
-  Mark done mutates only attention. Resurrection uses vendor transcript identity
-  to create a new source session. Split was a one-off migration, not a command.
+  Mark done mutates only attention. Archive records the source and vendor
+  transcript identity in History, then closes the live tmux session.
+  Resurrection uses that identity to create a new source session which resumes
+  the conversation. Split was a one-off migration, not a command.
+- An explicit archive instruction is sufficient authorization; no second
+  confirmation is required. Before closing, Fleet must prove that it has a
+  usable vendor resurrection identity and refuse the archive if it cannot.
+  Restore requests the full conversation history rather than deliberately
+  selecting a compressed resume path.
+- Creation always exposes the proposed source machine and waits for explicit
+  approval because moving a conversation between machines is difficult. Host
+  recommendations account for both domain affinity and hardware: home work
+  tends toward Lovelace, work toward Newton; CPU-heavy work benefits from
+  Newton's Threadripper, while GPU work must account for capacity and existing
+  load on Turing and Lovelace.
+- Creation also exposes the proposed agent and waits for approval because
+  switching an established conversation between agent vendors is difficult.
+  Commander recommends from task fit and current quota utilisation; scarce
+  Claude capacity, for example, biases a proposal toward Codex/OpenAI.
 - Exact machine labels are `N`, `L`, `B`, `T`, `OE`; no icon font is required.
 
 ## State and identity
@@ -70,8 +98,18 @@ and exposes cached values. Workstation restarts must not multiply API requests.
 Commander is a persistent agent, initially Claude Code behind a vendor-neutral
 typed action contract. It is both a precise voice-operated pair of hands and a
 conservative recommender. It may suggest replacement candidates at capacity but
-does not act until instructed. Future mdgtd context may propose start-of-day
+does not act until instructed. It indexes sessions through compact summaries,
+status and metadata, reading full Claude/Codex transcripts on demand when a
+request requires deeper context. Future mdgtd context may propose start-of-day
 work.
+
+Conversation discovery and retrieval are composable Python packages, not MCP
+servers. They provide direct APIs for locating, filtering, searching and reading
+Claude and Codex JSONL histories across machines, with thin Unix CLI adapters
+where agent tool use benefits from them. They remain useful independently of
+Commander and follow the post-MCP style shared with Alan Home and Alan Work:
+ordinary imports and processes, explicit inputs and outputs, no protocol layer
+or tool daemon.
 
 Voice has three mutually exclusive channels over one capture pipeline: literal
 dictation into a visible draft, read-only agent instructions and deterministic

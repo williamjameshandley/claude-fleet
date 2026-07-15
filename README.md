@@ -1,9 +1,7 @@
 # agent-fleet
 
 Agent Fleet is a fast, tmux-backed switchboard for Claude Code, Codex and shell
-sessions spread across several machines. `fleet-next` is the greenfield
-implementation; the original `fleet` remains installed during the cutover only
-for its vendor transcript readers and rollback.
+sessions spread across several machines.
 
 ## Experience
 
@@ -17,10 +15,10 @@ laptop the single `main` viewer is the explicit destination. A multi-screen deck
 focuses an already open source or uses a free slot; a full deck never evicts
 anything implicitly. `mod+v` returns to the always-visible Muster through i3.
 
-Fleet never links source windows into a mirror and has no delete, purge,
-`kill-session`, `kill-window` or `unlink-window` action. `d` marks an attention
-loop done in a tmux option; it does not end the session. Viewer dismissal only
-detaches that viewer.
+Fleet never links source windows into a mirror. `d` marks an attention loop done
+in a tmux option; it does not end the session. Viewer dismissal only detaches
+that viewer. Explicit archive will preserve vendor conversation identity before
+closing a session; permanent purge is not part of Fleet.
 
 ## Alan voice composer
 
@@ -55,9 +53,8 @@ Names, row positions and window indices are presentation. The daemon keeps its
 projection only in memory and exposes it through a mode-0600 runtime socket.
 Live topology remains entirely in tmux; there is no JSON state file or database.
 
-The host adapter currently reuses `fleet _poll` for the already verified Claude
-and Codex transcript semantics. It does not reuse the old manifest, writer,
-reconciliation, numbered windows, SSH viewers or `fleet@main`.
+The host adapter combines tmux process discovery with the composable
+`fleet_next.transcripts` readers for Claude and Codex JSONL.
 
 ## Commands
 
@@ -86,6 +83,5 @@ pytest
 env -u VIRTUAL_ENV PATH=/usr/bin:/bin makepkg -sif --noconfirm
 ```
 
-The old implementation and tests remain until the parallel soak proves direct
-viewing on Boltzmann, Noether and Newton. Cutover must not restart a tmux server
-or mutate a source session.
+Cutover and package updates must not restart a tmux server or mutate a source
+session.
