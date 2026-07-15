@@ -4,7 +4,7 @@ import json
 import sys
 import threading
 
-from . import actions, ui, viewer
+from . import actions, commander, ui, viewer
 from .daemon import Fleet
 from .protocol import encode
 from .quota import read as quota_read, update as quota_update
@@ -73,6 +73,7 @@ def main():
     item.add_argument("profile", choices=("laptop", "home", "office"))
     item.add_argument("--available", action="store_true")
     command("context", lambda _: actions.context())
+    command("commander", lambda _: commander.run())
     item = command("mutate", lambda a: mutate(a.key, a.operation, a.arguments))
     item.add_argument("key")
     item.add_argument("operation")
