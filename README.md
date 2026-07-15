@@ -31,6 +31,10 @@ publishes disposable snapshots. Navigation, sorting and preview never run SSH.
 Opening a remote source creates the one unavoidable long-lived interactive SSH
 attachment with `BatchMode=yes`.
 
+Pane previews use `capture-pane -eN`, reconstruct the terminal grid with
+libvterm, and apply tmux's `screen_write_preview` cursor-centred crop. Wide
+panes are clipped as terminal cells rather than wrapped as text.
+
 Live identity is:
 
 ```
@@ -68,7 +72,7 @@ Fleet has no icon-font dependency.
 ## Development
 
 ```
-python -m unittest discover -s tests -v
+pytest
 env -u VIRTUAL_ENV PATH=/usr/bin:/bin makepkg -sif --noconfirm
 ```
 
