@@ -102,12 +102,17 @@ def main():
         })
 
     screen("ALAN TRANSCRIPTION STUDY", f"{len(TRIALS)} recordings · about 8 minutes",
-           "Exact prompts have already been saved", "Press Enter when ready")
+           "Each prompt appears before a 3–2–1 countdown",
+           "Begin speaking when the screen says NOW",
+           "Recording stops automatically when its displayed timer reaches zero",
+           "You do not need to press anything between recordings",
+           "Exact prompts have already been saved",
+           "Press Enter once to begin · Ctrl-C cancels safely")
     input()
     for number, (name, phrase, seconds, instruction) in enumerate(TRIALS, 1):
-        screen(f"RECORDING {number} OF {len(TRIALS)}", instruction,
-               phrase or "[NO SPEECH]", "Press Enter when ready")
-        input()
+        screen(f"RECORDING {number} OF {len(TRIALS)}", "GET READY", instruction,
+               phrase or "[NO SPEECH]")
+        time.sleep(3)
         for count in (3, 2, 1):
             screen(f"RECORDING {number} OF {len(TRIALS)}", instruction,
                    phrase or "[NO SPEECH]", str(count))
@@ -121,10 +126,10 @@ def main():
             "duration": duration, "peak": peak,
         })
         screen(f"CAPTURED {number} OF {len(TRIALS)}", phrase or "[NO SPEECH]",
-               f"{duration:.1f} seconds · peak {peak}", "Press Enter to continue")
-        input()
-    screen("COMPLETE", str(root), "The window may now be closed")
-    input()
+               f"{duration:.1f} seconds · peak {peak}", "Next recording shortly")
+        time.sleep(2)
+    screen("COMPLETE", str(root), "The window will close in 15 seconds")
+    time.sleep(15)
 
 
 if __name__ == "__main__":
