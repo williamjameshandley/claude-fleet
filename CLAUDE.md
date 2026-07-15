@@ -43,8 +43,8 @@ machines, operable with one hand and eventually none.
 ## Voice and Commander
 
 Commander proposes typed, non-destructive actions over canonical sources and
-slots; deterministic Fleet code validates and executes them. Dictation inserts
-literal text into the genuinely focused viewer and never implies Enter. Spoken
-submit remains disabled until wake-word evidence justifies it. mdgtd, agentic
-composition and shared keyboard/mouse control are later integrations, not Fleet
-core state.
+slots; deterministic Fleet code validates and executes them. Alan composition
+is specified in `VOICE_COMPOSER.md`: speech edits a visible draft and only the
+local `Alan, send` control sends its visible snapshot and presses Enter. The
+composer archives recoverable state but never becomes tmux topology authority.
+mdgtd and shared keyboard/mouse control remain later integrations.

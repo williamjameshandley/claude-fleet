@@ -1,0 +1,88 @@
+#!/usr/bin/python3
+import random
+import sys
+import time
+import wave
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import sounddevice as sd
+
+
+RATE = 16000
+FRAME = 1280
+START_LEVEL = 75
+STOP_LEVEL = 60
+SILENCE_FRAMES = 15
+MAX_FRAMES = 150
+WORDS = ["COMPUTER", "ALAN", "HEY ALAN"] * 8
+CONTEXT = [
+    (wake, sentence)
+    for wake in ("COMPUTER", "ALAN", "HEY ALAN")
+    for sentence in (
+        "I would like to continue working on the email",
+        "type this into the focused session",
+        "can we review the current repository",
+        "open the session about Einstein",
+        "I need to correct the previous sentence",
+        "this is a longer piece of dictated text",
+    )
+]
+ROOT = Path.home() / ".local/state/agent-fleet/voice-study" / datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def screen(*lines):
+    print("\033[2J\033[H", end="")
+    print("\n\n" + "\n\n".join(f"{line:^64}" for line in lines), flush=True)
+
+
+def record(path):
+    frames = []
+    recent = deque(maxlen=SILENCE_FRAMES)
+    heard = False
+    with sd.InputStream(samplerate=RATE, channels=1, dtype="int16",
+                        blocksize=FRAME) as stream:
+        for _ in range(MAX_FRAMES):
+            frame, _ = stream.read(FRAME)
+            frames.append(frame.copy())
+            level = np.sqrt(np.mean(frame.astype(float) ** 2))
+            heard |= level >= START_LEVEL
+            recent.append(level < STOP_LEVEL)
+            if heard and len(recent) == SILENCE_FRAMES and all(recent):
+                break
+    audio = np.concatenate(frames)
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(RATE)
+        output.writeframes(audio.tobytes())
+    return int(np.abs(audio.astype(np.int32)).max()), len(audio) / RATE
+
+
+def main():
+    ROOT.mkdir(parents=True)
+    trials = ([(word, word) for word in WORDS] if "--words" in sys.argv
+              else [(wake, f"{wake}, {sentence}") for wake, sentence in CONTEXT])
+    random.shuffle(trials)
+    screen("WAKE-WORD STUDY", f"{len(trials)} short recordings", "Speak once after NOW")
+    time.sleep(4)
+    for number, (wake, phrase) in enumerate(trials, 1):
+        screen(f"RECORDING {number} OF {len(trials)}", "GET READY TO SAY", phrase)
+        time.sleep(2)
+        for count in (3, 2, 1):
+            screen(f"RECORDING {number} OF {len(trials)}", phrase, str(count))
+            time.sleep(0.7)
+        screen(f"RECORDING {number} OF {len(trials)}", phrase, "NOW")
+        name = wake.lower().replace(" ", "-")
+        peak, seconds = record(ROOT / f"{number:02}-{name}.wav")
+        screen(f"CAPTURED {number} OF {len(trials)}", phrase,
+               f"{seconds:.1f} seconds, level {peak}")
+        time.sleep(1)
+    screen("COMPLETE", "Thank you", str(ROOT))
+    time.sleep(15)
+
+
+if __name__ == "__main__":
+    main()

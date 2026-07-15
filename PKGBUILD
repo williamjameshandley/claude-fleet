@@ -1,6 +1,6 @@
 # Maintainer: Will Handley <wh260@cam.ac.uk>
 pkgname=agent-fleet
-pkgver=0.2.0.r91
+pkgver=0.2.0.r92
 pkgrel=1
 pkgdesc='Awareness and one-keypress switching for a fleet of terminal AI-agent sessions in tmux'
 arch=('x86_64')
@@ -15,6 +15,10 @@ optdepends=(
     'python-openwakeword: wake-dryrun harness (the mic machine)'
     'python-sounddevice: wake-dryrun harness (the mic machine)'
     'python-numpy: wake-dryrun harness (the mic machine)'
+    'python-gobject: Alan composer interface (the mic machine)'
+    'python-groq: Alan transcription (the mic machine)'
+    'xdotool: Alan destination focus restoration (the mic machine)'
+    'ffmpeg: Alan ambient FLAC archive (the mic machine)'
 )
 source=()
 sha256sums=()
@@ -29,7 +33,8 @@ pkgver() {
     hash=$(sha256sum fleet fleet-next fleet-preview.c fleet-muster fleet-viewer fleet-view \
       fleet-deck fleet-office fleet-commander fleet_next/*.py fleet-usage tmux.conf \
       fleet-next.service fleet-quota.service fleet-quota.timer \
-      wake-dryrun wake-dryrun.service LICENSE \
+      wake-dryrun wake-dryrun.service alan-composer alan-composer.service \
+      alan_composer/*.py LICENSE \
       | sha256sum | cut -c1-8)
     printf '%s.d%s\n' "$version" "$hash"
   fi
@@ -47,9 +52,13 @@ package() {
   local purelib="$pkgdir$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
   install -d "$purelib/fleet_next"
   install -m644 "$startdir"/fleet_next/*.py "$purelib/fleet_next/"
+  install -d "$purelib/alan_composer"
+  install -m644 "$startdir"/alan_composer/*.py "$purelib/alan_composer/"
   install -Dm644 "$startdir/tmux.conf" "$pkgdir/usr/share/agent-fleet/tmux.conf"
   install -Dm755 "$startdir/wake-dryrun" "$pkgdir/usr/lib/agent-fleet/wake-dryrun"
   install -Dm644 "$startdir/wake-dryrun.service" "$pkgdir/usr/lib/systemd/user/wake-dryrun.service"
+  install -Dm755 "$startdir/alan-composer" "$pkgdir/usr/bin/alan-composer"
+  install -Dm644 "$startdir/alan-composer.service" "$pkgdir/usr/lib/systemd/user/alan-composer.service"
   install -Dm644 "$startdir/fleet-next.service" "$pkgdir/usr/lib/systemd/user/fleet-next.service"
   install -Dm644 "$startdir/fleet-quota.service" "$pkgdir/usr/lib/systemd/user/fleet-quota.service"
   install -Dm644 "$startdir/fleet-quota.timer" "$pkgdir/usr/lib/systemd/user/fleet-quota.timer"

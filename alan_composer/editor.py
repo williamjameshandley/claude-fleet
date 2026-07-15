@@ -1,0 +1,45 @@
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "draft": {"type": "string"},
+        "log": {"type": "string"},
+    },
+    "required": ["draft", "log"],
+    "additionalProperties": False,
+}
+
+
+def edit(draft, raw, instruction=None, context=None):
+    task = (
+        "Edit a voice-composed prompt. Return the complete revised draft and one short "
+        "activity-log sentence. Preserve meaning and detail; remove fillers, false starts "
+        "and repetition. Correct technical names confidently. Treat settled earlier text "
+        "as stable unless later words make a change clearly superior. If a path or term is "
+        "ambiguous, leave the draft unchanged and mention alternatives only in the log. "
+        "You may inspect the filesystem and supplied conversation JSONL read-only when it "
+        "materially resolves a reference.\n\n"
+        "The current draft already includes the raw new transcript; do not append it a "
+        "second time.\n\n"
+        f"Current visible draft:\n{draft}\n\nRaw new transcript span:\n{raw}\n"
+    )
+    if instruction:
+        task += f"\nExplicit editing instruction:\n{instruction}\n"
+    if context:
+        task += f"\nContext pointers:\n{json.dumps(context)}\n"
+    with tempfile.TemporaryDirectory() as directory:
+        schema = Path(directory) / "schema.json"
+        output = Path(directory) / "output.json"
+        schema.write_text(json.dumps(SCHEMA))
+        subprocess.run(
+            ["codex", "exec", "--ephemeral", "--sandbox", "read-only",
+             "--skip-git-repo-check", "--output-schema", str(schema),
+             "--output-last-message", str(output), task],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return json.loads(output.read_text())

@@ -22,6 +22,15 @@ Fleet never links source windows into a mirror and has no delete, purge,
 loop done in a tmux option; it does not end the session. Viewer dismissal only
 detaches that viewer.
 
+## Alan voice composer
+
+`alan-composer.service` is the Boltzmann-only development service for the
+hands-free prompt composer specified in [VOICE_COMPOSER.md](VOICE_COMPOSER.md).
+It owns continuous tagged microphone capture and currently supports manual
+activation with `alan-composer open`. Wake activation is enabled only after a
+custom `Alan` model passes the recorded positive and household false-accept
+tests.
+
 ## Architecture
 
 Each workstation runs `fleet-next.service`. It maintains one long-lived,

@@ -73,15 +73,15 @@ conservative recommender. It may suggest replacement candidates at capacity but
 does not act until instructed. Future mdgtd context may propose start-of-day
 work.
 
-Voice ultimately has three mutually exclusive channels over one capture
-pipeline: literal focused-session dictation, Commander instructions and an
-explicit Enter command. Literal dictation never submits. Future composition uses
-a visible draft plus focused transcript/cwd/repository context for agentic edits;
-sending remains explicit. Wake words ship only after false-accept testing.
+Voice has three mutually exclusive channels over one capture pipeline: literal
+dictation into a visible draft, read-only agent instructions and deterministic
+local controls. `Alan, send` submits exactly the visible snapshot to the pinned
+tmux pane and presses Enter. The complete interaction and archive contract is in
+`VOICE_COMPOSER.md`. Wake-word activation ships only after false-accept testing.
 
 ## Future, not v1
 
-- Agentic composition and Markdown GTD integration.
+- Markdown GTD integration.
 - Fast local-model Commander implementations.
 - Optional shared keyboard/mouse control such as Deskflow.
 - A graphical deck map or full TUI, only if the physical deck plus fzf proves
