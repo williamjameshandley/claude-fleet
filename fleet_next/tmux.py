@@ -102,7 +102,7 @@ def event_stream(host):
         tmux.new_session("fleet@events", attach=False,
                          window_command="sleep infinity")
     process = subprocess.Popen(["tmux", "-C", "attach-session", "-f", "ignore-size",
-                                "-t", "=fleet@events"], stdin=subprocess.PIPE,
+                                "-t", "fleet@events"], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True, bufsize=1)
     assert process.stdout and process.stdin

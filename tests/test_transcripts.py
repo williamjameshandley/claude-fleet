@@ -1,12 +1,16 @@
 import json
 
-from fleet_next.transcripts import select_codex, transcript
+from fleet_next.transcripts import PANE_FORMAT, select_codex, transcript
 
 
 def rollout(path, identity, source="cli"):
     path.write_text(json.dumps({"type": "session_meta", "payload": {
         "id": identity, "source": source, "cwd": "/work"}}) + "\n")
     return str(path)
+
+
+def test_pane_format_preserves_an_empty_title_field():
+    assert "title=#{q:pane_title}" in PANE_FORMAT
 
 
 def test_explicit_codex_resume_selects_matching_rollout(tmp_path):

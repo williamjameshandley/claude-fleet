@@ -63,7 +63,7 @@ def dismiss_source(key):
         raise SystemExit("that source is not shown locally")
     for slot in shown:
         viewer.request(slot, "")
-    subprocess.run(["tmux", "display-message", "-t", "=fleet@muster",
+    subprocess.run(["tmux", "display-message", "-t", "fleet@muster",
                     "Viewer dismissed; source session is still running"])
 
 
@@ -101,15 +101,15 @@ def arrive(profile, available=False):
     sessions, _, unavailable = decode_message(snapshot())
     if unavailable and not available:
         raise SystemExit("inventory incomplete; unavailable: " + " ".join(unavailable))
-    result = subprocess.run(["tmux", "show-options", "-v", "-t", "=fleet@muster",
+    result = subprocess.run(["tmux", "show-options", "-gv",
                              "@fleet_profile"], text=True, capture_output=True)
     current = result.stdout.strip() if result.returncode == 0 else ""
     if current == profile:
         return
     epoch = str(time.time_ns())
-    subprocess.run(["tmux", "set-option", "-t", "=fleet@muster", "@fleet_profile", profile],
+    subprocess.run(["tmux", "set-option", "-g", "@fleet_profile", profile],
                    check=True)
-    subprocess.run(["tmux", "set-option", "-t", "=fleet@muster", "@fleet_epoch", epoch],
+    subprocess.run(["tmux", "set-option", "-g", "@fleet_epoch", epoch],
                    check=True)
     placements = viewer.slots()
     free = [slot for slot, source in placements if not source]
@@ -140,7 +140,7 @@ def focused_slot():
 
 def context():
     sessions, _, unavailable = decode_message(snapshot())
-    profile = subprocess.run(["tmux", "show-options", "-v", "-t", "=fleet@muster",
+    profile = subprocess.run(["tmux", "show-options", "-gv",
                               "@fleet_profile"], text=True, capture_output=True).stdout.strip()
     data = {
         "profile": profile,

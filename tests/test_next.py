@@ -52,6 +52,20 @@ class IdentityTests(unittest.TestCase):
         self.assertIn('"$1" = restart', launcher)
         self.assertNotIn("fleet-next commander\"", launcher)
 
+    def test_muster_and_main_route_to_the_lovelace_hub(self):
+        root = Path(__file__).parents[1]
+        muster = (root / "fleet-muster").read_text()
+        main = (root / "fleet-viewer").read_text()
+        service = (root / "fleet-next.service").read_text()
+        self.assertIn('exec ssh -tt -o BatchMode=yes "$hub" fleet-muster', muster)
+        self.assertIn("new-session -d -s fleet@main", main)
+        self.assertIn("set-option -t fleet@main prefix None", main)
+        self.assertIn("ConditionHost=lovelace", service)
+
+    def test_named_viewers_remain_local(self):
+        launcher = (Path(__file__).parents[1] / "fleet-viewer").read_text()
+        self.assertTrue(launcher.rstrip().endswith('exec fleet-next viewer --slot "$slot"'))
+
     def test_viewer_dismiss_is_an_explicit_clear(self):
         root = Path(__file__).parents[1]
         with tempfile.TemporaryDirectory() as runtime:

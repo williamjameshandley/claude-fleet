@@ -37,9 +37,9 @@ machines, operable with one hand and eventually none.
   custom UI machinery. Keep code lean and comments factual.
 - Do not add defensive fallbacks that guess identities or hide drift. Translate
   boundary failures into visible errors. Never retry by session name or recency.
-- No persistent JSON state. Runtime sockets and in-memory projections are
-  disposable. Workstation epoch/profile state, when implemented, lives in the
-  local `fleet@muster` tmux session; actual placement comes from i3.
+- No persistent JSON state. Lovelace owns the sole disposable in-memory
+  projection and the global `fleet@muster` and `fleet@main` sessions. Actual
+  named-viewer placement remains workstation-local and comes from i3.
 - Verify installed tmux, SSH, fzf and agent behavior experimentally. In
   particular, control observers attach with `ignore-size`, shell-bound remote
   arguments use `shlex.join`, and tmux `#{q:}` fields are parsed with `shlex`.

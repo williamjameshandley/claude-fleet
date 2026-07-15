@@ -4,8 +4,9 @@ import socket
 import sys
 import shlex
 import json
+import subprocess
 
-from .config import RUNTIME, hosts
+from .config import HUB, RUNTIME, hosts
 from .protocol import decode_message, encode
 
 
@@ -132,23 +133,30 @@ class Fleet:
         return await future
 
 
-def snapshot():
+def request(message):
     path = RUNTIME / "fleet.sock"
     with socket.socket(socket.AF_UNIX) as client:
         client.connect(str(path))
-        client.sendall(b"snapshot\n")
+        client.sendall((message + "\n").encode())
         chunks = []
         while chunk := client.recv(65536):
             chunks.append(chunk)
     return b"".join(chunks).decode()
+
+
+def projection():
+    return request("snapshot")
+
+
+def snapshot():
+    if os.uname().nodename.split(".", 1)[0] == HUB:
+        return projection()
+    return subprocess.run(["ssh", "-T", "-o", "BatchMode=yes", HUB,
+                           "fleet-next projection"], text=True,
+                          capture_output=True, check=True).stdout
 
 
 def preview(key, columns=0, lines=0):
-    path = RUNTIME / "fleet.sock"
-    with socket.socket(socket.AF_UNIX) as client:
-        client.connect(str(path))
-        client.sendall((f"preview {key} {columns} {lines}\n").encode())
-        chunks = []
-        while chunk := client.recv(65536):
-            chunks.append(chunk)
-    return b"".join(chunks).decode()
+    if os.uname().nodename.split(".", 1)[0] != HUB:
+        raise RuntimeError("pane previews are served by the Lovelace Muster")
+    return request(f"preview {key} {columns} {lines}")

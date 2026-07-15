@@ -30,8 +30,8 @@ a row drops into the real session for keyboard, mouse or voice input.
 
 ## Interaction
 
-- Laptop: persistent Muster and one direct viewer in a 50:50 i3 layout.
-  Selecting another row explicitly replaces that sole viewer attachment.
+- Laptop: the global Lovelace Muster and privileged Main are attached in a
+  50:50 i3 layout. Selecting another row replaces Main's direct attachment.
 - Multi-screen: focus an already visible source, otherwise use a free fixed
   slot. At full capacity, refuse implicit replacement and ask for a destination.
 - A station may remain visibly blank until the user asks Commander to populate
@@ -71,17 +71,20 @@ a row drops into the real session for keyboard, mouse or voice input.
 - Agent state, summary, transcript recency and quota are derived and rebuildable.
   Agent state, attention state and viewer placement are separate domains.
 - Fleet has no persistent JSON state or independently mutable catalogue.
-  Disposable projections live in memory; attention/profile markers may live in
-  tmux options; placement comes from i3 and viewer registrations.
+  Disposable projections live in memory; attention markers live with source
+  tmux sessions, while workstation profile markers live in that workstation's
+  tmux global options. Placement comes from i3 and viewer registrations.
 
 ## Performance and transport
 
 - Topology changes are event driven through stock tmux control mode. Transcript
   changes are filesystem-event driven. A complete inventory occurs at start or
   reconnect, not on cursor movement.
-- Every workstation keeps a persistent event/control SSH process per remote
-  host. Navigation and preview never launch SSH. A newly opened remote viewer
-  uses one long-lived interactive BatchMode attachment.
+- Lovelace keeps one persistent event/control process per source host and owns
+  the sole derived fleet projection. Workstations attach the global Muster and
+  privileged Main; their additional named viewers remain local. Navigation and
+  preview never launch SSH. A newly opened remote viewer uses one long-lived
+  interactive BatchMode attachment.
 - SSH routes, ProxyJump/fallback and credentials belong to OpenSSH config.
 - Control observers never link source windows and attach with `ignore-size`.
   Viewers use normal client geometry, which must be tested at every profile.

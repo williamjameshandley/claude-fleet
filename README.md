@@ -5,13 +5,14 @@ sessions spread across several machines.
 
 ## Experience
 
-Muster is a persistent local fzf list. Working and needs-action sessions rise to
+Muster is one persistent fzf list on Lovelace. Working and needs-action sessions rise to
 the top, waiting work follows by meaningful transcript recency, and shelved work
 stays visible at the bottom. Its cursor is keyed by the canonical source ID, so
 sorting cannot turn one row into another.
 
-Enter opens the selected real tmux session in a persistent Ghostty viewer. On a
-laptop the single `main` viewer is the explicit destination. A multi-screen deck
+Enter opens the selected real tmux session in the global `fleet@main` viewer on
+Lovelace. Muster and Main are attachable from every workstation and therefore
+retain one shared selection while the user moves. A multi-screen deck
 focuses an already open source or uses a free slot; a full deck never evicts
 anything implicitly. `mod+v` returns to the always-visible Muster through i3.
 
@@ -32,12 +33,12 @@ tests.
 
 ## Architecture
 
-Each workstation runs `fleet-next.service`. It maintains one long-lived,
+Lovelace alone runs `fleet-next.service`. It maintains one long-lived,
 non-interactive SSH event stream per configured host. The host helper combines
 tmux control-mode lifecycle notifications with transcript filesystem events and
 publishes disposable snapshots. Navigation, sorting and preview never run SSH.
-Opening a remote source creates the one unavoidable long-lived interactive SSH
-attachment with `BatchMode=yes`.
+Opening a remote source in Main or a named workstation viewer creates the one
+unavoidable long-lived interactive SSH attachment with `BatchMode=yes`.
 
 Pane previews use `capture-pane -eN`, reconstruct the terminal grid with
 libvterm, and apply tmux's `screen_write_preview` cursor-centred crop. Wide
@@ -59,8 +60,9 @@ The host adapter combines tmux process discovery with the composable
 ## Commands
 
 ```
-fleet-muster                    persistent local Muster
-fleet-viewer main               persistent direct-attachment slot
+fleet-muster                    attach the global Lovelace Muster
+fleet-viewer main               attach the global Lovelace Main
+fleet-viewer SLOT               run a workstation-local named slot
 fleet-next show SOURCE          focus/open a source
 fleet-next show SOURCE --slot S explicit replacement
 fleet-next dismiss --slot S     detach a viewer only

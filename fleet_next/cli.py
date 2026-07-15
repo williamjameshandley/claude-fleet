@@ -5,7 +5,7 @@ import sys
 import threading
 
 from . import actions, ui, viewer
-from .daemon import Fleet
+from .daemon import Fleet, projection
 from .protocol import encode
 from .quota import read as quota_read, update as quota_update
 from .tmux import capture, event_stream, inventory, mutate
@@ -54,6 +54,7 @@ def main():
         item = command(name, fn)
         item.add_argument("--host", required=True)
     command("serve", lambda _: asyncio.run(Fleet().serve()))
+    command("projection", lambda _: print(projection(), end=""))
     command("quota", lambda _: quota_update())
     command("rows", lambda _: ui.rows())
     command("items", lambda _: ui.rows(include_header=False))

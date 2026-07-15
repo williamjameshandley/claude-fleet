@@ -93,8 +93,8 @@ def muster():
         "--bind=r:execute(fleet-next rename {1})+reload(fleet-next items)",
         "--bind=d:execute-silent(fleet-next done {1})+reload(fleet-next items)",
         "--bind=x:execute-silent(fleet-next dismiss-source {1})+reload-sync(fleet-next items)",
-        "--bind=tab:execute-silent(tmux select-window -t =fleet@muster:history)",
-        "--bind=shift-tab:execute-silent(tmux select-window -t =fleet@muster:history)",
+        "--bind=tab:execute-silent(tmux select-window -t fleet@muster:history)",
+        "--bind=shift-tab:execute-silent(tmux select-window -t fleet@muster:history)",
         "--preview=fleet-next preview {1} $FZF_PREVIEW_COLUMNS $FZF_PREVIEW_LINES",
         "--preview-window=down,45%,nowrap,follow,border-none",
     ]
@@ -123,7 +123,7 @@ def history():
         "--nth=2..", "--id-nth=1", "--layout=reverse", "--no-multi",
         "--header=History  Enter resurrect  Tab live",
         "--bind=enter:execute(fleet-next resurrect {1})+reload(fleet-next history-rows)",
-        "--bind=tab:execute-silent(tmux select-window -t =fleet@muster:live)",
-        "--bind=shift-tab:execute-silent(tmux select-window -t =fleet@muster:live)",
+        "--bind=tab:execute-silent(tmux select-window -t fleet@muster:live)",
+        "--bind=shift-tab:execute-silent(tmux select-window -t fleet@muster:live)",
     ]
     os.execvp(command[0], command)

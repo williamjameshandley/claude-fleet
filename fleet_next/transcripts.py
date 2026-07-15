@@ -14,8 +14,8 @@ CLAUDE = Path.home() / ".claude/projects"
 CODEX = Path.home() / ".codex/sessions"
 AGENTS = {"claude", "codex"}
 PRIORITY = {"needs-action": 0, "working": 1, "waiting": 2, "finished": 3}
-PANE_FORMAT = ("#{q:session_name} #{q:session_id} #{q:pane_pid} "
-               "#{q:pane_current_command} #{q:pane_title}")
+PANE_FORMAT = ("name=#{q:session_name} session=#{q:session_id} pid=#{q:pane_pid} "
+               "command=#{q:pane_current_command} title=#{q:pane_title}")
 
 
 @dataclass(frozen=True)
@@ -215,13 +215,16 @@ def observe(sessions):
     panes = subprocess.run(["tmux", "list-panes", "-a", "-F", PANE_FORMAT],
                            text=True, capture_output=True, check=True).stdout
     for line in panes.splitlines():
-        name, session_id, pid, command, title = shlex.split(line)
+        name, session_id, pid, command, title = (
+            field.split("=", 1)[1] for field in shlex.split(line))
         agent = Path(command).name
         if agent not in AGENTS or "@" in name:
             continue
         tree = [int(pid), *descendants(int(pid), children)]
         if agent == "claude":
-            entry = next(claude[item] for item in tree if item in claude)
+            entry = next((claude[item] for item in tree if item in claude), None)
+            if entry is None:
+                continue
             identity = entry["sessionId"]
             state = ("needs-action" if entry.get("state") == "blocked" else
                      "waiting" if entry["status"] == "idle" or title.startswith("✳") else
@@ -230,7 +233,10 @@ def observe(sessions):
             updated = last_event_time(path) if path.exists() else 0
             summary = title
         else:
-            item = codex_transcript(tree)
+            try:
+                item = codex_transcript(tree)
+            except RuntimeError:
+                continue
             identity = item.session_id
             state, summary, updated = codex_state(item)
         rows.append((session_id, agent, state, " ".join(summary.split()), updated, identity))
