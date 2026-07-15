@@ -29,3 +29,12 @@ class Archive:
             output.setframerate(rate)
             output.writeframes(data)
         return path
+
+    def latest(self):
+        latest = None
+        if self.events.exists():
+            for line in self.events.read_text().splitlines():
+                item = json.loads(line)
+                if item["event"] in {"sent", "cancelled"}:
+                    latest = item
+        return latest

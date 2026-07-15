@@ -5,10 +5,9 @@ import sys
 from alan_composer.app import Composer, SOCKET
 
 
-if len(sys.argv) == 2 and sys.argv[1] == "open":
+if len(sys.argv) == 2 and sys.argv[1] in {"open", "recover"}:
     with socket.socket(socket.AF_UNIX) as client:
         client.connect(str(SOCKET))
-        client.sendall(b"OPEN\n")
+        client.sendall(sys.argv[1].upper().encode() + b"\n")
 else:
     Composer().start()
-

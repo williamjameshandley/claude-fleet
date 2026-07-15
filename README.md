@@ -27,7 +27,8 @@ detaches that viewer.
 `alan-composer.service` is the Boltzmann-only development service for the
 hands-free prompt composer specified in [VOICE_COMPOSER.md](VOICE_COMPOSER.md).
 It owns continuous tagged microphone capture and currently supports manual
-activation with `alan-composer open`. Wake activation is enabled only after a
+activation with `alan-composer open`; `alan-composer recover` reopens the most
+recent sent or cancelled draft as a new composition. Wake activation is enabled only after a
 custom `Alan` model passes the recorded positive and household false-accept
 tests.
 

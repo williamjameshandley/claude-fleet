@@ -16,7 +16,7 @@ from .archive import Archive, ROOT
 from .audio import Capture, RATE, Segmenter, WakeDetector
 from . import delivery, destination
 from .editor import edit
-from .model import Composition, Mode, classify
+from .model import Composition, Destination, Mode, classify
 from .transcribe import Transcriber
 
 
@@ -57,6 +57,19 @@ class Composer:
         self._show("LISTENING", "Opened")
         self.archive.record(self.composition, "opened",
                             destination=self._destination_data())
+
+    def recover(self):
+        if self.composition or not (item := self.archive.latest()):
+            return
+        target = Destination(**item["destination"]) if item.get("destination") else None
+        self.composition = Composition(draft=item["draft"], destination=target)
+        self.segmenter.start()
+        self.entry.set_text(item["draft"])
+        self.entry.set_position(-1)
+        self.activity.set_text("")
+        self._show("LISTENING", "Recovered")
+        self.archive.record(self.composition, "recovered",
+                            source=item["composition"], destination=self._destination_data())
 
     def _audio(self, block):
         self.segmenter.feed(block)
@@ -312,5 +325,8 @@ class Composer:
             while True:
                 client, _ = server.accept()
                 with client:
-                    if client.recv(32).strip() == b"OPEN":
+                    command = client.recv(32).strip()
+                    if command == b"OPEN":
                         GLib.idle_add(self.open)
+                    elif command == b"RECOVER":
+                        GLib.idle_add(self.recover)

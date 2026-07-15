@@ -33,6 +33,7 @@ class VoiceModelTests(unittest.TestCase):
             archive.record(composition, "opened")
             archive.record(composition, "cancelled", draft="recover me")
             self.assertEqual(len(archive.events.read_text().splitlines()), 2)
+            self.assertEqual(archive.latest()["draft"], "recover me")
 
     def test_segmenter_preroll_and_stop(self):
         complete = []
