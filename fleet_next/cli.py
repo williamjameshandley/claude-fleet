@@ -15,23 +15,27 @@ from .transcripts import history as transcript_history, resume
 
 def events(args):
     lock = threading.Lock()
+    consumer = threading.Event()
 
     def emit(message):
         with lock:
             print(message, flush=True)
 
     def requests():
-        for line in sys.stdin:
-            request = json.loads(line)
-            try:
-                text = capture(request["key"], request["columns"], request["lines"])
-                response = {"preview": request["preview"], "text": text}
-            except RuntimeError as error:
-                response = {"preview": request["preview"], "error": str(error)}
-            emit(json.dumps(response, separators=(",", ":")))
+        try:
+            for line in sys.stdin:
+                request = json.loads(line)
+                try:
+                    text = capture(request["key"], request["columns"], request["lines"])
+                    response = {"preview": request["preview"], "text": text}
+                except RuntimeError as error:
+                    response = {"preview": request["preview"], "error": str(error)}
+                emit(json.dumps(response, separators=(",", ":")))
+        finally:
+            consumer.set()
 
     threading.Thread(target=requests, daemon=True).start()
-    for sessions in event_stream(args.host):
+    for sessions in event_stream(args.host, consumer):
         usage = quota_read() if args.host == hosts()[0] else {}
         emit(encode(sessions, usage))
 

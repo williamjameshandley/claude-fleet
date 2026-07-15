@@ -87,8 +87,13 @@ def inventory(host):
     return sessions
 
 
-def event_stream(host):
+def event_stream(host, consumer=None):
     changed = queue.Queue()
+    if consumer:
+        def disconnected():
+            consumer.wait()
+            changed.put("consumer")
+        threading.Thread(target=disconnected, daemon=True).start()
     RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
     paths = [path for path in (Path.home() / ".claude/projects",
                                Path.home() / ".codex/sessions", RUNTIME) if path.exists()]
@@ -139,9 +144,13 @@ def event_stream(host):
             if serial != previous:
                 yield current
                 previous = serial
+            if consumer and consumer.is_set():
+                return
             event = changed.get()
             while not changed.empty():
                 event = changed.get_nowait()
+            if consumer and consumer.is_set():
+                return
             if event == "closed" or process.poll() is not None:
                 error = process.stderr.read().strip() if process.stderr else ""
                 raise RuntimeError(error or "tmux control client closed")
