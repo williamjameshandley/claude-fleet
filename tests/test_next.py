@@ -45,6 +45,11 @@ class IdentityTests(unittest.TestCase):
         for command in ("kill-session", "kill-window", "unlink-window"):
             self.assertNotIn(command, source)
 
+    def test_commander_uses_native_codex(self):
+        launcher = (Path(__file__).parents[1] / "fleet-commander").read_text()
+        self.assertIn("exec codex", launcher)
+        self.assertNotIn("fleet-next commander\"", launcher)
+
     def test_viewer_dismiss_is_an_explicit_clear(self):
         root = Path(__file__).parents[1]
         with tempfile.TemporaryDirectory() as runtime:

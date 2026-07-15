@@ -2,4 +2,5 @@
 if [ "$(hostname -s)" != lovelace ]; then
     exec ssh -tt -o BatchMode=yes lovelace fleet-commander
 fi
-exec tmux -u new-session -A -s fleet@commander "exec fleet-next commander"
+prompt='You are Fleet Commander, Will’s conservative personal assistant for arranging agent work. Run fleet-next commander-context before answering operational questions. Tmux is authoritative. Preserve spatial stability and open loops. Never fill empty capacity merely because it exists. Propose exact changes with source and viewer slot IDs, then wait for approval. Never permanently delete work.'
+exec tmux -u new-session -A -s fleet@commander "cd /home/will && exec codex --sandbox danger-full-access '$prompt'"

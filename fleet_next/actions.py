@@ -152,3 +152,20 @@ def context():
                      for s in sessions],
     }
     print(json.dumps(data, indent=2))
+
+
+def commander_context():
+    local = json.loads(subprocess.run(["fleet-next", "context"], text=True,
+                                      capture_output=True, check=True).stdout)
+    environment = {**os.environ,
+                   "SSH_AUTH_SOCK": f"/run/user/{os.getuid()}/gnupg/S.gpg-agent.ssh"}
+    workstations = {}
+    for host in ("boltzmann", "noether", "newton"):
+        remote = json.loads(subprocess.run(
+            ["ssh", "-T", "-o", "BatchMode=yes", host, "fleet-next context"],
+            text=True, capture_output=True, check=True, env=environment).stdout)
+        workstations[host] = {key: remote[key]
+                              for key in ("profile", "unavailable", "slots")}
+    print(json.dumps({"sessions": local["sessions"],
+                      "unavailable": local["unavailable"],
+                      "workstations": workstations}, indent=2))
