@@ -72,7 +72,16 @@ fleet-next done SOURCE          shelve its attention loop
 fleet-view                      laptop 50:50 launcher
 fleet-deck                      home multi-screen launcher
 fleet-commander                 persistent Claude Commander session
+fleet-snapshot snapshot [file]  record pane topology + claude session ids
+fleet-snapshot restore [file]   recreate panes and `claude --resume` each
 ```
+
+`fleet-snapshot` is an explicit, user-invoked reboot bridge: it writes a
+disposable snapshot file (default `~/fleet-snapshot.json`) before a planned
+reboot and replays it afterwards. It is not live topology authority — tmux
+remains the source of truth. Claude panes sharing a cwd are paired to
+transcripts by recency, so pairing within such a group can swap; all sessions
+still resume.
 
 Host aliases come from `~/.config/agent-fleet/hosts`. Routing and credentials
 belong to OpenSSH configuration. Machine labels are ASCII (`N L B T OE`), so
