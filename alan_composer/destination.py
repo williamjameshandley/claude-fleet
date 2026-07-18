@@ -3,7 +3,7 @@ import os
 import shlex
 import subprocess
 
-from fleet_next import viewer
+from fleet_next.config import HUB
 from fleet_next.remote import find
 
 from .model import Destination
@@ -27,7 +27,12 @@ def capture():
     instance = properties.get("instance", "")
     if not instance.startswith("fleet-") or instance in {"fleet-muster", "fleet-commander"}:
         return None
-    key = viewer.exchange(instance.removeprefix("fleet-"), "STATUS")
+    slot = instance.removeprefix("fleet-")
+    command = ["fleet-next", "viewer-status", slot]
+    if slot == "main" and os.uname().nodename.split(".", 1)[0] != HUB:
+        command = ["ssh", "-T", "-o", "BatchMode=yes", HUB, *command]
+    status = subprocess.run(command, capture_output=True, text=True)
+    key = status.stdout.strip() if status.returncode == 0 else ""
     if not key:
         return None
     session = find(key)

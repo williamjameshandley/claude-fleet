@@ -88,6 +88,11 @@ class IdentityTests(unittest.TestCase):
                          ["codex", "--sandbox", "danger-full-access",
                           "--ask-for-approval", "never"])
 
+    def test_composer_resolves_privileged_main_on_the_hub(self):
+        source = (Path(__file__).parents[1] / "alan_composer/destination.py").read_text()
+        self.assertIn('slot == "main"', source)
+        self.assertIn('"BatchMode=yes", HUB', source)
+
     def test_viewer_dismiss_is_an_explicit_clear(self):
         root = Path(__file__).parents[1]
         with tempfile.TemporaryDirectory() as runtime:
