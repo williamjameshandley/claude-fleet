@@ -10,7 +10,7 @@ from pathlib import Path
 import gi
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk  # noqa: E402
 
 from .archive import Archive, ROOT
 from .audio import Capture, WakeDetector
@@ -24,6 +24,42 @@ RUNTIME = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / 
 SOCKET = RUNTIME / "alan.sock"
 
 
+class TextPane:
+    def __init__(self, editable=True):
+        self.view = Gtk.TextView()
+        self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self.view.set_editable(editable)
+        self.view.set_cursor_visible(editable)
+        self.view.set_left_margin(6)
+        self.view.set_right_margin(6)
+        self.view.set_top_margin(4)
+        self.view.set_bottom_margin(4)
+        self.buffer = self.view.get_buffer()
+        self.widget = Gtk.ScrolledWindow()
+        self.widget.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.widget.add(self.view)
+
+    def connect(self, signal, callback):
+        return self.buffer.connect(signal, lambda buffer: callback(self))
+
+    def get_text(self):
+        return self.buffer.get_text(
+            self.buffer.get_start_iter(), self.buffer.get_end_iter(), True)
+
+    def set_text(self, text):
+        self.buffer.set_text(text)
+
+    def set_position(self, position):
+        iterator = self.buffer.get_end_iter() if position < 0 else self.buffer.get_iter_at_offset(position)
+        self.buffer.place_cursor(iterator)
+        self.view.scroll_mark_onscreen(self.buffer.get_insert())
+
+    def content_height(self):
+        iterator = self.buffer.get_end_iter()
+        y, height = self.view.get_line_yrange(iterator)
+        return y + height + 8
+
+
 class Composer:
     def __init__(self):
         self.composition = None
@@ -32,6 +68,10 @@ class Composer:
         self.pool = ThreadPoolExecutor(max_workers=3)
         self.opening_from_wake = False
         self.paused_wake = False
+        self.partial_base = None
+        self.rendering_partial = False
+        self.geometry = None
+        self.resize_pending = False
         self.window, self.entry, self.status, self.target, self.activity = self._window()
         self.entry.connect("changed", self._entry_changed)
         self.wake = None
@@ -86,8 +126,33 @@ class Composer:
             self.open(preroll, True)
         return False
 
-    def _utterance(self, raw):
-        GLib.idle_add(self._raw, raw)
+    def _utterance(self, event):
+        GLib.idle_add(self._transcript, event)
+
+    def _transcript(self, event):
+        if not self.composition:
+            return False
+        if event.get("type") == "partial":
+            if self.partial_base is None:
+                self.partial_base = self.composition.draft
+            self.rendering_partial = True
+            self.entry.set_text(self._joined(self.partial_base, event["text"]))
+            self.entry.set_position(-1)
+            self.rendering_partial = False
+            self._render_status("TRANSCRIBING")
+            return False
+        base = self.partial_base
+        self.partial_base = None
+        if base is not None:
+            self.composition = replace(self.composition, draft=base)
+            self.rendering_partial = True
+            self.entry.set_text(base)
+            self.rendering_partial = False
+        return self._raw(event["text"])
+
+    @staticmethod
+    def _joined(before, text):
+        return f"{before.rstrip()} {text}" if before.strip() else text
 
     def _raw(self, raw):
         if not self.composition:
@@ -175,6 +240,7 @@ class Composer:
             self.archive.record(self.composition, outcome, draft=self.entry.get_text(),
                                 destination=self._destination_data())
         self.composition = None
+        self.partial_base = None
         self.transcriber.stop()
         if self.wake:
             self.wake.reset()
@@ -191,44 +257,48 @@ class Composer:
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         status = Gtk.Label(label="LISTENING")
         target = Gtk.Label(label="NO DESTINATION")
-        entry = Gtk.Entry()
-        entry.set_hexpand(True)
-        activity = Gtk.Entry()
-        activity.set_editable(False)
-        activity.set_can_focus(False)
-        activity.set_width_chars(38)
+        entry = TextPane()
+        activity = TextPane(editable=False)
+        panes = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
+        panes.set_hexpand(True)
+        panes.pack1(entry.widget, True, False)
+        panes.pack2(activity.widget, True, False)
         box.pack_start(status, False, False, 6)
         box.pack_start(target, False, False, 0)
-        box.pack_start(entry, True, True, 0)
-        box.pack_start(activity, False, False, 6)
+        box.pack_start(panes, True, True, 0)
         window.add(box)
         css = Gtk.CssProvider()
         css.load_from_data(b"""
             #alan-composer { background: rgba(29,32,33,.94); border: 2px solid #a89984; }
-            entry { background: #282828; color: #ebdbb2; border: 0; padding: 2px; }
+            textview { background: #282828; color: #ebdbb2; border: 0; }
             label { color: #ebdbb2; font: 10pt 'Source Code Pro Light'; }
         """)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.panes = panes
         return window, entry, status, target, activity
 
     def _entry_changed(self, entry):
-        if self.composition:
+        if self.composition and not self.rendering_partial:
+            self.partial_base = None
             self.composition = replace(self.composition, draft=entry.get_text())
+        self._queue_resize()
 
     def _show(self, status, activity):
         screen = self.window.get_screen()
         display = screen.get_display()
         monitor = display.get_monitor_at_point(*display.get_default_seat().get_pointer().get_position()[1:])
         geometry = monitor.get_geometry()
+        self.geometry = geometry
         self._render_status(status)
         self.target.set_text(self.composition.destination.label if self.composition.destination else "NO DESTINATION")
         self._log(activity)
         self.window.show_all()
-        self.window.resize(geometry.width, 42)
+        self.panes.set_position(round(geometry.width * .68))
         self.window.move(geometry.x, geometry.y)
+        self._queue_resize()
         self.window.present()
-        self.entry.grab_focus()
+        self.entry.view.grab_focus()
 
     def _render_status(self, value):
         if self.composition and self.composition.queued:
@@ -240,6 +310,7 @@ class Composer:
         history = self.activity.get_text()
         self.activity.set_text(f"{history}  ·  {message}" if history else message)
         self.activity.set_position(-1)
+        self._queue_resize()
         return False
 
     def _highlight(self, before, after):
@@ -247,17 +318,33 @@ class Composer:
         for old, new in zip(before, after):
             if old != new:
                 break
-            start += len(new.encode())
-        attributes = Pango.AttrList()
-        colour = Pango.attr_background_new(80 * 257, 73 * 257, 69 * 257)
-        colour.start_index = start
-        colour.end_index = len(after.encode())
-        attributes.insert(colour)
-        self.entry.set_attributes(attributes)
+            start += 1
+        self.entry.buffer.remove_all_tags(
+            self.entry.buffer.get_start_iter(), self.entry.buffer.get_end_iter())
+        tag = self.entry.buffer.create_tag(None, background="#504945")
+        self.entry.buffer.apply_tag(
+            tag,
+            self.entry.buffer.get_iter_at_offset(start),
+            self.entry.buffer.get_end_iter())
         GLib.timeout_add(1400, self._clear_highlight)
 
     def _clear_highlight(self):
-        self.entry.set_attributes(Pango.AttrList())
+        self.entry.buffer.remove_all_tags(
+            self.entry.buffer.get_start_iter(), self.entry.buffer.get_end_iter())
+        return False
+
+    def _queue_resize(self):
+        if self.window.get_visible() and not self.resize_pending:
+            self.resize_pending = True
+            GLib.idle_add(self._resize)
+
+    def _resize(self):
+        self.resize_pending = False
+        if not self.geometry:
+            return False
+        content = max(self.entry.content_height(), self.activity.content_height())
+        height = min(max(52, content), max(52, self.geometry.height // 3))
+        self.window.resize(self.geometry.width, height)
         return False
 
     def _destination_data(self):

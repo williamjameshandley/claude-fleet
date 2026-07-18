@@ -75,7 +75,7 @@ class VoiceModelTests(unittest.TestCase):
             if received:
                 break
             done.wait(.01)
-        self.assertEqual(received, ["hello"])
+        self.assertEqual(received, [{"type": "utterance", "text": "hello"}])
 
 if __name__ == "__main__":
     unittest.main()

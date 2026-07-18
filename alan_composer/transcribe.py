@@ -18,8 +18,8 @@ AUTH_URL = os.environ.get(
 class Transcriber:
     """Full-duplex client for Alan Home's PCM-to-utterance boundary."""
 
-    def __init__(self, utterance):
-        self.utterance = utterance
+    def __init__(self, event):
+        self.event = event
         self.audio = None
         self.socket = None
 
@@ -63,4 +63,4 @@ class Transcriber:
     def _read(self, reader):
         with reader:
             for line in reader:
-                self.utterance(json.loads(line)["text"])
+                self.event(json.loads(line))
