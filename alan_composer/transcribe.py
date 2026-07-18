@@ -36,4 +36,3 @@ class Transcriber:
             response_format="text",
         )
         return result.strip()
-

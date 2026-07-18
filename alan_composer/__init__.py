@@ -1,2 +1,1 @@
 """Alan voice composer."""
-
