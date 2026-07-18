@@ -317,7 +317,7 @@ class Composer:
 
     def _log(self, message):
         history = self.activity.get_text()
-        self.activity.set_text(f"{history}  ·  {message}" if history else message)
+        self.activity.set_text(f"{history}\n{message}" if history else message)
         self.activity.set_position(-1)
         self._queue_resize()
         return False
@@ -351,7 +351,7 @@ class Composer:
         self.resize_pending = False
         if not self.geometry:
             return False
-        content = max(self.entry.content_height(), self.activity.content_height())
+        content = self.entry.content_height()
         height = min(max(58, content + 30), max(58, self.geometry.height // 3))
         self.window.resize(self.geometry.width, height)
         return False
