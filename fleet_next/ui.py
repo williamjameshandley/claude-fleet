@@ -75,7 +75,7 @@ def muster():
     sock = RUNTIME / "muster.sock"
     sock.unlink(missing_ok=True)
     command = [
-        "fzf", "--listen", str(sock), "--track", "--disabled", "--no-input", "--ansi",
+        "fzf", "--listen", str(sock), "--track", "--exact", "--disabled", "--no-input", "--ansi",
         f"--color={FZF_COLOUR}",
         "--no-unicode", "--pointer=>", "--gutter= ",
         "--no-scrollbar", "--no-hscroll",
@@ -118,7 +118,7 @@ def cursor():
 
 def history():
     command = [
-        "fzf", "--track", "--delimiter=\t", "--with-nth=2..",
+        "fzf", "--track", "--exact", "--delimiter=\t", "--with-nth=2..",
         f"--color={FZF_COLOUR}",
         "--id-nth=1", "--layout=reverse", "--no-sort", "--no-multi",
         "--header=History  Enter resurrect  Tab live",
