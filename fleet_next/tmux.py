@@ -103,6 +103,10 @@ def event_stream(host, consumer=None):
                 changed.put("transcript")
         threading.Thread(target=transcripts, daemon=True).start()
     tmux = server()
+    probe = subprocess.run(["tmux", "list-sessions"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL)
+    if probe.returncode:
+        raise RuntimeError("tmux server is not running")
     if not tmux.has_session("fleet@events"):
         tmux.new_session("fleet@events", attach=False,
                          window_command="sleep infinity")

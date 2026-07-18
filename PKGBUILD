@@ -36,7 +36,7 @@ package() {
   install -d "$pkgdir/usr/lib/agent-fleet"
   cc -std=c11 -D_POSIX_C_SOURCE=200809L -O2 -Wall -Wextra -Werror \
     "$startdir/fleet-preview.c" -o "$pkgdir/usr/lib/agent-fleet/fleet-preview" -lvterm
-  local purelib="$pkgdir$(python3 -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+  local purelib="$pkgdir$(/usr/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
   install -d "$purelib/fleet_next"
   install -m644 "$startdir"/fleet_next/*.py "$purelib/fleet_next/"
   install -d "$purelib/alan_composer"

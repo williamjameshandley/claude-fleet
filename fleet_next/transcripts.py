@@ -209,7 +209,7 @@ def codex_transcript(pids):
 def observe(sessions):
     claude = {item["pid"]: item for item in json.loads(subprocess.run(
         ["claude", "agents", "--json"], text=True, capture_output=True,
-        check=True).stdout)}
+        check=True).stdout) if "pid" in item}
     children = process_tree()
     rows = []
     panes = subprocess.run(["tmux", "list-panes", "-a", "-F", PANE_FORMAT],

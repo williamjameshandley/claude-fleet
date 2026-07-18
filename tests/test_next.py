@@ -46,6 +46,17 @@ class IdentityTests(unittest.TestCase):
         for command in ("kill-session", "kill-window", "unlink-window"):
             self.assertNotIn(command, source)
 
+    def test_collector_cannot_create_a_tmux_server(self):
+        source = (Path(__file__).parents[1] / "fleet_next/tmux.py").read_text()
+        probe = source.index('["tmux", "list-sessions"]')
+        create = source.index('tmux.new_session("fleet@events"')
+        self.assertLess(probe, create)
+        self.assertIn('raise RuntimeError("tmux server is not running")', source)
+
+    def test_package_ignores_activated_python_environments(self):
+        source = (Path(__file__).parents[1] / "PKGBUILD").read_text()
+        self.assertIn("/usr/bin/python -c", source)
+
     def test_commander_uses_native_codex(self):
         launcher = (Path(__file__).parents[1] / "fleet-commander").read_text()
         self.assertIn('.thread_name == "commander"', launcher)
