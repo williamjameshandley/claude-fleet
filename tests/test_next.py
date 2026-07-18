@@ -68,6 +68,8 @@ class IdentityTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / "fleet_next/ui.py").read_text()
         self.assertIn("fleet-next show --slot main {1}", source)
         self.assertIn('"--no-sort"', source)
+        self.assertNotIn('"--nth=2.."', source)
+        self.assertIn("change-prompt(Search: )", source)
 
     def test_named_viewers_remain_local(self):
         launcher = (Path(__file__).parents[1] / "fleet-viewer").read_text()
