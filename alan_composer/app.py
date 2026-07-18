@@ -25,8 +25,9 @@ SOCKET = RUNTIME / "alan.sock"
 
 
 class TextPane:
-    def __init__(self, editable=True):
+    def __init__(self, name, editable=True):
         self.view = Gtk.TextView()
+        self.view.set_name(name)
         self.view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self.view.set_editable(editable)
         self.view.set_cursor_visible(editable)
@@ -254,24 +255,32 @@ class Composer:
         window.set_skip_taskbar_hint(True)
         window.set_default_size(1920, 42)
         window.connect("key-press-event", self._key)
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         status = Gtk.Label(label="LISTENING")
         target = Gtk.Label(label="NO DESTINATION")
-        entry = TextPane()
-        activity = TextPane(editable=False)
+        entry = TextPane("draft")
+        activity = TextPane("activity", editable=False)
         panes = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         panes.set_hexpand(True)
         panes.pack1(entry.widget, True, False)
         panes.pack2(activity.widget, True, False)
-        box.pack_start(status, False, False, 6)
-        box.pack_start(target, False, False, 0)
+        header.pack_start(status, False, False, 6)
+        header.pack_start(target, False, False, 0)
+        box.pack_start(header, False, False, 0)
         box.pack_start(panes, True, True, 0)
         window.add(box)
         css = Gtk.CssProvider()
         css.load_from_data(b"""
             #alan-composer { background: rgba(29,32,33,.94); border: 2px solid #a89984; }
-            textview { background: #282828; color: #ebdbb2; border: 0; }
-            label { color: #ebdbb2; font: 10pt 'Source Code Pro Light'; }
+            textview, textview text, scrolledwindow {
+                background-color: #282828;
+                color: #ebdbb2;
+                border: 0;
+                font: 13pt 'Source Code Pro';
+            }
+            #activity, #activity text { background-color: #32302f; color: #d5c4a1; }
+            label { color: #ebdbb2; font: 11pt 'Source Code Pro'; padding: 4px; }
         """)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -343,7 +352,7 @@ class Composer:
         if not self.geometry:
             return False
         content = max(self.entry.content_height(), self.activity.content_height())
-        height = min(max(52, content), max(52, self.geometry.height // 3))
+        height = min(max(58, content + 30), max(58, self.geometry.height // 3))
         self.window.resize(self.geometry.width, height)
         return False
 
