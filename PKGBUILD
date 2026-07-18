@@ -1,6 +1,6 @@
 # Maintainer: Will Handley <wh260@cam.ac.uk>
 pkgname=agent-fleet
-pkgver=0.2.0.r121
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Awareness and one-keypress switching for a fleet of terminal AI-agent sessions in tmux'
 arch=('x86_64')
@@ -22,23 +22,6 @@ optdepends=(
 )
 source=()
 sha256sums=()
-
-pkgver() {
-  cd "$startdir"
-  local version hash
-  version="0.2.0.r$(git rev-list --count HEAD)"
-  if git diff --quiet && git diff --cached --quiet; then
-    printf '%s\n' "$version"
-  else
-    hash=$(sha256sum fleet-next fleet-preview.c fleet-muster fleet-viewer fleet-view \
-      fleet-deck fleet-office fleet-commander fleet_next/*.py fleet-usage \
-      fleet-next.service fleet-quota.service fleet-quota.timer \
-      wake-dryrun wake-dryrun.service alan-composer alan-composer.service \
-      alan_composer/*.py LICENSE \
-      | sha256sum | cut -c1-8)
-    printf '%s.d%s\n' "$version" "$hash"
-  fi
-}
 
 package() {
   install -Dm755 "$startdir/fleet-next" "$pkgdir/usr/bin/fleet-next"
