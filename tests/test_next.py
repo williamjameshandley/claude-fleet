@@ -137,6 +137,18 @@ class IdentityTests(unittest.TestCase):
         execute.assert_called_once_with(
             "codex", ["codex", "resume", "--remote", "unix:///run/codex.sock", "thread-1"])
 
+    def test_alan_attach_execs_the_declared_claude_tmux_session(self):
+        actor = alan_inventory("lovelace", [{
+            "addr": "claude-1", "type": "claude", "state": "waiting",
+            "label": "review", "cwd": "/work", "native": {"id": "session-1"},
+            "attachment": {"kind": "tmux", "session": "fleet@actor-claude-1"},
+        }])[0]
+        with mock.patch("fleet_next.viewer.find", return_value=actor), \
+             mock.patch("os.execvp") as execute:
+            viewer.attach(actor.ref.key)
+        execute.assert_called_once_with(
+            "tmux", ["tmux", "attach-session", "-t", "fleet@actor-claude-1"])
+
     def test_python_create_routes_through_alan_and_opens_the_actor_identity(self):
         host = os.uname().nodename
         with mock.patch("fleet_next.actions.desktop_input",
@@ -158,6 +170,17 @@ class IdentityTests(unittest.TestCase):
             actions.create()
         spawn.assert_called_once_with("analysis", "/work")
         show.assert_called_once_with("main", f"alan:{host}:codex-deadbeef")
+
+    def test_claude_create_routes_through_alan_actor_identity(self):
+        host = os.uname().nodename
+        with mock.patch("fleet_next.actions.desktop_input",
+                        side_effect=[host, "claude", "analysis", "/work"]), \
+             mock.patch("fleet_next.actions.spawn_claude",
+                        return_value="claude-deadbeef") as spawn, \
+             mock.patch("fleet_next.actions.viewer.request") as show:
+            actions.create()
+        spawn.assert_called_once_with("analysis", "/work")
+        show.assert_called_once_with("main", f"alan:{host}:claude-deadbeef")
 
     def test_done_is_attention_not_agent_or_lifecycle_state(self):
         session = self.session("newton")

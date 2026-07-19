@@ -172,6 +172,9 @@ def attach(key):
                                 "unix://" + attachment["socket"],
                                 attachment["thread_id"]])
             return
+        if attachment.get("kind") == "tmux":
+            os.execvp("tmux", ["tmux", "attach-session", "-t", attachment["session"]])
+            return
         raise SystemExit(f"actor {session.ref.session_id} has no supported attachment")
     host = session.ref.server.host
     current = [s for s in inventory(host) if s.ref.key == key]
