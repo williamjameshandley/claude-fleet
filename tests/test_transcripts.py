@@ -1,6 +1,6 @@
 import json
 
-from fleet_next.transcripts import PANE_FORMAT, select_codex, transcript
+from fleet_next.transcripts import PANE_FORMAT, indexed_claude_agents, select_codex, transcript
 
 
 def rollout(path, identity, source="cli"):
@@ -11,6 +11,12 @@ def rollout(path, identity, source="cli"):
 
 def test_pane_format_preserves_an_empty_title_field():
     assert "title=#{q:pane_title}" in PANE_FORMAT
+
+
+def test_stopped_claude_agents_without_pids_are_ignored():
+    live = {"pid": 42, "sessionId": "live"}
+    stopped = {"sessionId": "stopped", "state": "stopped"}
+    assert indexed_claude_agents(json.dumps([live, stopped])) == {42: live}
 
 
 def test_explicit_codex_resume_selects_matching_rollout(tmp_path):
