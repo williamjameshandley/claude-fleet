@@ -11,7 +11,8 @@ from .daemon import preview as pane_preview, snapshot
 from .protocol import decode
 from .protocol import decode_message
 from . import viewer
-from .alan import spawn_claude, spawn_codex, spawn_python, rename as alan_rename
+from .alan import (spawn_claude, spawn_codex, spawn_python,
+                   rename as alan_rename, set_attention as alan_attention)
 
 
 def host_command(host, *command, capture_output=False):
@@ -98,7 +99,15 @@ def rename(key):
 def done(key):
     session = find(key)
     if session.ref.server.kind == "alan":
-        raise SystemExit("Alan actor attention is not implemented yet")
+        for slot, source in viewer.slots():
+            if source == key:
+                viewer.request(slot, "")
+        if session.ref.server.host == os.uname().nodename:
+            alan_attention(session.ref.session_id, "done")
+        else:
+            host_command(session.ref.server.host, "fleet-next", "alan-attention",
+                         session.ref.session_id, "done")
+        return
     for slot, source in viewer.slots():
         if source == key:
             viewer.request(slot, "")

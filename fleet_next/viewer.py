@@ -70,8 +70,11 @@ def show(key, slot=None):
     session = find(key)
     if session.attention == "done":
         host = session.ref.server.host
-        command = shlex.join(("fleet-next", "mutate", key, "attention", "tracked"))
-        argv = (["fleet-next", "mutate", key, "attention", "tracked"]
+        operation = (("fleet-next", "alan-attention", session.ref.session_id, "tracked")
+                     if session.ref.server.kind == "alan" else
+                     ("fleet-next", "mutate", key, "attention", "tracked"))
+        command = shlex.join(operation)
+        argv = (list(operation)
                 if host == os.uname().nodename else
                 ["ssh", "-T", "-o", "BatchMode=yes", host, command])
         subprocess.run(argv, check=True)

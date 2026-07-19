@@ -1,7 +1,7 @@
 # agent-fleet
 
-Agent Fleet is a fast switchboard for attachable Claude Code, Codex, shell and
-Alan Python sessions spread across several machines.
+Agent Fleet is a fast switchboard for attachable shell and standalone vendor
+terminals plus Alan Python, Codex and Claude actors spread across several machines.
 
 ## Experience
 
@@ -11,14 +11,15 @@ stays visible at the bottom. Its cursor is keyed by the canonical source ID, so
 sorting cannot turn one row into another.
 
 Enter attaches the global `fleet@main` viewer to the selected native session:
-tmux for terminal agents, or Jupyter Console for an Alan Python actor's live
-kernel. Muster and Main are attachable from every workstation and therefore
+tmux for terminals and Alan Claude, Jupyter Console for Alan Python, and the
+native remote client for Alan Codex. Muster and Main are attachable from every workstation and therefore
 retain one shared selection while the user moves. A multi-screen deck
 focuses an already open source or uses a free slot; a full deck never evicts
 anything implicitly. `mod+v` returns to the always-visible Muster through i3.
 
 Fleet never links source windows into a mirror. `d` marks an attention loop done
-in a tmux option; it does not end the session. Viewer dismissal only detaches
+in a tmux option or, for Alan actors, by appending a `fleet_attention` event to
+the local passive `fleet` mailbox; it does not end the session. Viewer dismissal only detaches
 that viewer. Explicit archive will preserve vendor conversation identity before
 closing a session; permanent purge is not part of Fleet.
 
@@ -70,7 +71,7 @@ fleet-viewer SLOT               run a workstation-local named slot
 fleet-next show SOURCE          focus/open a source
 fleet-next show SOURCE --slot S explicit replacement
 fleet-next dismiss --slot S     detach a viewer only
-fleet-next create               create a tmux session or Alan Python/Codex actor
+fleet-next create               create shell or Alan Python/Codex/Claude work
 fleet-next rename SOURCE        rename the native source
 fleet-next done SOURCE          shelve its attention loop
 fleet-view                      laptop 50:50 launcher
@@ -95,6 +96,10 @@ The packaged Alan socket configuration is `/etc/agent-fleet/alan-socket` and
 may be overridden per user by `~/.config/agent-fleet/alan-socket` or explicitly
 with `LOOP_SOCKET`. An unavailable Alan socket removes Alan rows but does not
 invalidate healthy tmux inventory on the same host.
+
+Alan lifecycle actors are Python, Codex and Claude (plus Alan's direct `llm`
+type, which has no Fleet attachment). There is no native Alan Gemini actor.
+Already-running standalone Gemini terminals remain ordinary legacy tmux rows.
 
 ## Development
 

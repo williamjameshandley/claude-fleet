@@ -137,7 +137,7 @@ def event_stream(host, consumer=None):
             if alan.error and alan.error != alan_error:
                 print(alan.error, file=sys.stderr, flush=True)
             alan_error = alan.error
-            current = inventory(host) + alan_inventory(host, alan.actors)
+            current = inventory(host) + alan_inventory(host, alan.actors, alan.attention)
             try:
                 current = observe(current)
                 agent_cache = {session.ref: session for session in current}

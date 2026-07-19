@@ -21,6 +21,7 @@ from fleet_next.config import ssh_environment
 from fleet_next.alan import inventory as alan_inventory
 from fleet_next.alan import socket_path as alan_socket_path
 from fleet_next.alan import Watcher as AlanWatcher
+from fleet_next.alan import set_attention as alan_set_attention
 from fleet_next import viewer
 
 
@@ -58,6 +59,47 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(actor.ref.server.kind, "alan")
         self.assertEqual(actor.state, "working")
         self.assertEqual(actor.name, "analysis")
+
+    def test_alan_inventory_reconstructs_attention_from_fleet_mailbox(self):
+        actor = alan_inventory("lovelace", [{
+            "addr": "python-1", "type": "python", "state": "live",
+            "attachment": {"kind": "jupyter", "connection_file": "/run/k.json"},
+        }], {"python-1": "done"})[0]
+        self.assertEqual(actor.attention, "done")
+
+    def test_alan_attention_appends_a_fleet_mailbox_event(self):
+        with mock.patch("fleet_next.alan.request") as request:
+            alan_set_attention("claude-1", "done")
+        request.assert_called_once_with({
+            "op": "send", "to": "fleet", "payload": {
+                "kind": "fleet_attention", "actor": "claude-1",
+                "attention": "done"}})
+
+    def test_attention_replay_paginates_before_publishing(self):
+        watcher = object.__new__(AlanWatcher)
+        watcher.attention = {}
+        watcher._changed = queue.Queue()
+        watcher._consumer = threading.Event()
+        first = [{"idx": index, "payload": {"kind": "fleet_attention",
+                  "actor": f"python-{index}", "attention": "done"}}
+                 for index in range(100)]
+        second = [{"idx": 100, "payload": {"kind": "fleet_attention",
+                   "actor": "python-0", "attention": "tracked"}}]
+
+        def response(_payload):
+            if response.calls == 0:
+                response.calls += 1
+                return {"messages": first}
+            watcher._consumer.set()
+            return {"messages": second}
+
+        response.calls = 0
+        with mock.patch("fleet_next.alan.configured", return_value=True), \
+             mock.patch("fleet_next.alan.request", side_effect=response):
+            watcher._run_attention()
+        self.assertEqual(watcher.attention["python-0"], "tracked")
+        self.assertEqual(len(watcher.attention), 100)
+        self.assertEqual(watcher._changed.qsize(), 1)
 
     def test_non_attachable_alan_actors_are_not_fleet_rows(self):
         self.assertEqual(alan_inventory("lovelace", [{

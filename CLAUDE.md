@@ -5,8 +5,9 @@ across machines, operable with one hand and eventually none.
 
 ## The source is the view
 
-- A viewer attaches to the requested native session: tmux for terminal agents,
-  Jupyter Console for an Alan Python actor. There is no Main
+- A viewer attaches to the requested native session: tmux for terminal agents
+  and Alan Claude, Jupyter Console for Alan Python, and Codex remote attach for
+  Alan Codex. There is no Main
   mirror, linked observer, copied window, numbered join or parallel ordering.
 - tmux owns terminal sessions, windows, panes and focus. Alan owns actor
   lifecycle, mailboxes and native attachment descriptors. Fleet has no topology DB.
