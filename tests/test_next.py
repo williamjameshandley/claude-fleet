@@ -4,6 +4,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
+import queue
+import socket
+import threading
+from unittest import mock
 from pathlib import Path
 
 from fleet_next.model import ServerRef, Session, SessionRef
@@ -11,7 +16,12 @@ from fleet_next.protocol import decode, encode
 from fleet_next.ui import STATE_ORDER
 from fleet_next.tmux import split_key
 from fleet_next.actions import agent_command
+from fleet_next import actions
 from fleet_next.config import ssh_environment
+from fleet_next.alan import inventory as alan_inventory
+from fleet_next.alan import socket_path as alan_socket_path
+from fleet_next.alan import Watcher as AlanWatcher
+from fleet_next import viewer
 
 
 class IdentityTests(unittest.TestCase):
@@ -25,6 +35,105 @@ class IdentityTests(unittest.TestCase):
     def test_protocol_round_trip_preserves_canonical_identity(self):
         sessions = [self.session("newton"), self.session("lovelace")]
         self.assertEqual(decode(encode(sessions)), sessions)
+
+    def test_protocol_round_trip_preserves_tagged_alan_identity(self):
+        actor = alan_inventory("newton", [{
+            "addr": "python-deadbeef", "type": "python", "state": "live",
+            "label": "notebook", "cwd": "/work", "native": {"id": "kernel-1"},
+            "attachment": {"kind": "jupyter", "connection_file": "/run/kernel.json"},
+        }])[0]
+
+        self.assertEqual(actor.ref.key, "alan:newton:python-deadbeef")
+        self.assertEqual(decode(encode([actor])), [actor])
+        self.assertEqual(actor.agent, "python")
+        self.assertEqual(actor.attachment["connection_file"], "/run/kernel.json")
+
+    def test_alan_inventory_maps_busy_actor_without_creating_tmux_identity(self):
+        actor = alan_inventory("lovelace", [{
+            "addr": "python-1", "type": "python", "state": "busy",
+            "label": "analysis", "cwd": None, "native": None,
+            "attachment": {"kind": "jupyter", "connection_file": "/run/kernel.json"},
+        }])[0]
+
+        self.assertEqual(actor.ref.server.kind, "alan")
+        self.assertEqual(actor.state, "working")
+        self.assertEqual(actor.name, "analysis")
+
+    def test_non_attachable_alan_actors_are_not_fleet_rows(self):
+        self.assertEqual(alan_inventory("lovelace", [{
+            "addr": "llm-1", "type": "llm", "state": "live", "label": "hidden",
+            "attachment": {"kind": "none"},
+        }]), [])
+
+    def test_packaged_service_and_noninteractive_cli_share_explicit_alan_socket(self):
+        root = Path(__file__).parents[1]
+        self.assertEqual((root / "alan-socket").read_text().strip(),
+                         "/run/alan-loop/loop.sock")
+        self.assertNotIn("LOOP_SOCKET=", (root / "fleet-next.service").read_text())
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch("fleet_next.alan.Path.home", return_value=Path("/missing")), \
+             mock.patch("fleet_next.alan.Path.exists", return_value=True), \
+             mock.patch("fleet_next.alan.Path.read_text",
+                        return_value="/run/alan-loop/loop.sock\n"):
+            self.assertEqual(alan_socket_path(), Path("/run/alan-loop/loop.sock"))
+
+    def test_watch_protocol_failure_clears_actor_rows_and_retries(self):
+        actor = {"addr": "python-1", "type": "python", "state": "live",
+                 "attachment": {"kind": "jupyter", "connection_file": "/run/k.json"}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "loop.sock"
+            ready = threading.Event()
+
+            def serve():
+                with socket.socket(socket.AF_UNIX) as server:
+                    server.bind(str(path))
+                    server.listen()
+                    ready.set()
+                    connection, _ = server.accept()
+                    with connection:
+                        connection.makefile().readline()
+                        connection.sendall((json.dumps({"ok": True, "actors": [actor]}) +
+                                            "\n").encode())
+                        time.sleep(.05)
+                        connection.sendall(b'{"ok":false,"error":"watch rejected"}\n')
+
+            threading.Thread(target=serve, daemon=True).start()
+            self.assertTrue(ready.wait(1))
+            changed = queue.Queue()
+            stopped = threading.Event()
+            with mock.patch.dict(os.environ, {"LOOP_SOCKET": str(path)}):
+                watcher = AlanWatcher(changed, stopped)
+                deadline = time.monotonic() + 2
+                while watcher.actors and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertEqual(watcher.actors, [])
+                self.assertFalse(watcher.available)
+                self.assertEqual(watcher.error, "watch rejected")
+                self.assertGreaterEqual(changed.qsize(), 2)
+                stopped.set()
+
+    def test_alan_attach_execs_the_declared_jupyter_connection_file(self):
+        actor = alan_inventory("lovelace", [{
+            "addr": "python-1", "type": "python", "state": "live",
+            "label": "analysis", "cwd": "/work",
+            "attachment": {"kind": "jupyter", "connection_file": "/run/kernel.json"},
+        }])[0]
+        with mock.patch("fleet_next.viewer.find", return_value=actor), \
+             mock.patch("os.execvp") as execute:
+            viewer.attach(actor.ref.key)
+        execute.assert_called_once_with(
+            "jupyter", ["jupyter", "console", "--existing", "/run/kernel.json"])
+
+    def test_python_create_routes_through_alan_and_opens_the_actor_identity(self):
+        host = os.uname().nodename
+        with mock.patch("fleet_next.actions.desktop_input",
+                        side_effect=[host, "python", "analysis", "/work"]), \
+             mock.patch("fleet_next.actions.spawn_python",
+                        return_value="python-deadbeef") as spawn, \
+             mock.patch("fleet_next.actions.viewer.request") as show:
+            actions.create()
+        spawn.assert_called_once_with("analysis", "/work")
+        show.assert_called_once_with("main", f"alan:{host}:python-deadbeef")
 
     def test_done_is_attention_not_agent_or_lifecycle_state(self):
         session = self.session("newton")

@@ -7,7 +7,7 @@ arch=('x86_64')
 url='https://github.com/williamjameshandley/agent-fleet'
 license=('MIT')
 options=('!debug')
-depends=(python python-libtmux python-watchfiles tmux fzf openssh curl procps-ng libvterm)
+depends=(python python-libtmux python-watchfiles jupyter-console tmux fzf openssh curl procps-ng libvterm)
 optdepends=(
     'ghostty: workstation viewer terminals'
     'i3-wm: workstation layout and focus control'
@@ -31,7 +31,7 @@ pkgver() {
   else
     hash=$(sha256sum fleet-next fleet-preview.c fleet-muster fleet-viewer fleet-view \
       fleet-deck fleet-office fleet-commander fleet_next/*.py fleet-usage \
-      fleet-next.service fleet-quota.service fleet-quota.timer \
+      fleet-next.service fleet-quota.service fleet-quota.timer alan-socket \
       wake-dryrun wake-dryrun.service alan-composer alan-composer.service \
       alan_composer/*.py LICENSE \
       | sha256sum | cut -c1-8)
@@ -41,6 +41,7 @@ pkgver() {
 
 package() {
   install -Dm755 "$startdir/fleet-next" "$pkgdir/usr/bin/fleet-next"
+  install -Dm644 "$startdir/alan-socket" "$pkgdir/etc/agent-fleet/alan-socket"
   for script in fleet-muster fleet-viewer fleet-view fleet-deck fleet-office fleet-commander fleet-snapshot; do
     install -Dm755 "$startdir/$script" "$pkgdir/usr/bin/$script"
   done

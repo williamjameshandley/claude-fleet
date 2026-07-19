@@ -1,15 +1,18 @@
 # Agent Fleet constitution
 
-Agent Fleet provides awareness and switching for tmux agent sessions across
-machines, operable with one hand and eventually none.
+Agent Fleet provides awareness and switching for attachable native sessions
+across machines, operable with one hand and eventually none.
 
 ## The source is the view
 
-- A viewer attaches to the requested real tmux session. There is no Main
+- A viewer attaches to the requested native session: tmux for terminal agents,
+  Jupyter Console for an Alan Python actor. There is no Main
   mirror, linked observer, copied window, numbered join or parallel ordering.
-- tmux owns live sessions, windows, panes and focus. Fleet has no topology DB.
-- Canonical identity is host, socket, server PID, server start time and tmux
-  object ID. Names, indices and rows are never identity.
+- tmux owns terminal sessions, windows, panes and focus. Alan owns actor
+  lifecycle, mailboxes and native attachment descriptors. Fleet has no topology DB.
+- Canonical identity is a tagged source reference: host, socket, server PID,
+  server start time and tmux object ID; or Alan host and actor address. Names,
+  indices and rows are never identity.
 - Agent status and summaries are derived, disposable projections. Attention is
   separate from agent state; `done` never means the tmux session was killed.
 - fzf renders and selects stable IDs. It is not authoritative state.

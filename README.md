@@ -1,7 +1,7 @@
 # agent-fleet
 
-Agent Fleet is a fast, tmux-backed switchboard for Claude Code, Codex and shell
-sessions spread across several machines.
+Agent Fleet is a fast switchboard for attachable Claude Code, Codex, shell and
+Alan Python sessions spread across several machines.
 
 ## Experience
 
@@ -10,8 +10,9 @@ the top, waiting work follows by meaningful transcript recency, and shelved work
 stays visible at the bottom. Its cursor is keyed by the canonical source ID, so
 sorting cannot turn one row into another.
 
-Enter opens the selected real tmux session in the global `fleet@main` viewer on
-Lovelace. Muster and Main are attachable from every workstation and therefore
+Enter attaches the global `fleet@main` viewer to the selected native session:
+tmux for terminal agents, or Jupyter Console for an Alan Python actor's live
+kernel. Muster and Main are attachable from every workstation and therefore
 retain one shared selection while the user moves. A multi-screen deck
 focuses an already open source or uses a free slot; a full deck never evicts
 anything implicitly. `mod+v` returns to the always-visible Muster through i3.
@@ -35,8 +36,9 @@ tests.
 
 Lovelace alone runs `fleet-next.service`. It maintains one long-lived,
 non-interactive SSH event stream per configured host. The host helper combines
-tmux control-mode lifecycle notifications with transcript filesystem events and
-publishes disposable snapshots. Navigation, sorting and preview never run SSH.
+tmux control-mode lifecycle notifications, Alan's actor watch stream and
+transcript filesystem events, then publishes disposable snapshots. Navigation,
+sorting and preview never run SSH.
 Opening a remote source in Main or a named workstation viewer creates the one
 unavoidable long-lived interactive SSH attachment with `BatchMode=yes`.
 
@@ -44,7 +46,7 @@ Pane previews use `capture-pane -eN`, reconstruct the terminal grid with
 libvterm, and apply tmux's `screen_write_preview` cursor-centred crop. Wide
 panes are clipped as terminal cells rather than wrapped as text.
 
-Live identity is:
+Tmux identity is:
 
 ```
 host + tmux socket + server PID + server start time + $session_id
@@ -52,7 +54,9 @@ host + tmux socket + server PID + server start time + $session_id
 
 Names, row positions and window indices are presentation. The daemon keeps its
 projection only in memory and exposes it through a mode-0600 runtime socket.
-Live topology remains entirely in tmux; there is no JSON state file or database.
+Tmux topology remains entirely in tmux. Alan actors retain their own addresses
+and expose explicit attachment descriptors; Fleet does not infer them from
+processes or names. There is no Fleet JSON state file or database.
 
 The host adapter combines tmux process discovery with the composable
 `fleet_next.transcripts` readers for Claude and Codex JSONL.
@@ -66,8 +70,8 @@ fleet-viewer SLOT               run a workstation-local named slot
 fleet-next show SOURCE          focus/open a source
 fleet-next show SOURCE --slot S explicit replacement
 fleet-next dismiss --slot S     detach a viewer only
-fleet-next create               create a real tmux session
-fleet-next rename SOURCE        rename a real tmux session
+fleet-next create               create a tmux session or Alan Python actor
+fleet-next rename SOURCE        rename the native source
 fleet-next done SOURCE          shelve its attention loop
 fleet-view                      laptop 50:50 launcher
 fleet-deck                      home multi-screen launcher
@@ -87,10 +91,15 @@ Host aliases come from `~/.config/agent-fleet/hosts`. Routing and credentials
 belong to OpenSSH configuration. Machine labels are ASCII (`N L B T OE`), so
 Fleet has no icon-font dependency.
 
+The packaged Alan socket configuration is `/etc/agent-fleet/alan-socket` and
+may be overridden per user by `~/.config/agent-fleet/alan-socket` or explicitly
+with `LOOP_SOCKET`. An unavailable Alan socket removes Alan rows but does not
+invalidate healthy tmux inventory on the same host.
+
 ## Development
 
 ```
-pytest
+python -m pytest
 env -u VIRTUAL_ENV PATH=/usr/bin:/bin makepkg -sif --noconfirm
 ```
 

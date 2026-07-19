@@ -14,6 +14,7 @@ from watchfiles import watch
 from .model import ServerRef, Session, SessionRef
 from .agent import observe
 from .config import RUNTIME
+from .alan import Watcher as AlanWatcher, inventory as alan_inventory
 
 PREVIEW = Path("/usr/lib/agent-fleet/fleet-preview")
 
@@ -89,6 +90,7 @@ def inventory(host):
 
 def event_stream(host, consumer=None):
     changed = queue.Queue()
+    alan = AlanWatcher(changed, consumer)
     if consumer:
         def disconnected():
             consumer.wait()
@@ -129,9 +131,13 @@ def event_stream(host, consumer=None):
     previous = None
     force = False
     agent_cache = {}
+    alan_error = None
     try:
         while True:
-            current = inventory(host)
+            if alan.error and alan.error != alan_error:
+                print(alan.error, file=sys.stderr, flush=True)
+            alan_error = alan.error
+            current = inventory(host) + alan_inventory(host, alan.actors)
             try:
                 current = observe(current)
                 agent_cache = {session.ref: session for session in current}

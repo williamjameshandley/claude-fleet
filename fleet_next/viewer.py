@@ -9,6 +9,7 @@ import re
 from .config import HUB, RUNTIME, ssh_environment
 from .tmux import inventory
 from .remote import find
+from .model import key_host
 
 
 SLOT = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -97,7 +98,7 @@ def show(key, slot=None):
 
 
 def command(key):
-    host = key.split(":", 1)[0]
+    host = key_host(key)
     local = os.uname().nodename
     attach = ["fleet-next", "attach", key]
     return attach if host == local else ["ssh", "-tt", "-o", "BatchMode=yes", host,
@@ -159,7 +160,15 @@ def serve(slot):
 
 
 def attach(key):
-    host = key.split(":", 1)[0]
+    session = find(key)
+    if session.ref.server.kind == "alan":
+        attachment = session.attachment or {}
+        if attachment.get("kind") == "jupyter":
+            os.execvp("jupyter", ["jupyter", "console", "--existing",
+                                   attachment["connection_file"]])
+            return
+        raise SystemExit(f"actor {session.ref.session_id} has no supported attachment")
+    host = session.ref.server.host
     current = [s for s in inventory(host) if s.ref.key == key]
     if len(current) != 1:
         raise SystemExit(f"session identity changed: {key}")

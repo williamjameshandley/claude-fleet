@@ -46,7 +46,7 @@ def rows(include_header=True):
                   "x" if session.attention == "done" else
                   {"needs-action": "!", "working": "*", "waiting": ".",
                    "finished": "-"}[session.state])
-        agent = {"claude": "Claude", "codex": "OpenAI", "gemini": "Gemini",
+        agent = {"claude": "Claude", "codex": "OpenAI", "python": "Python", "gemini": "Gemini",
                  "multiple": "Agents", "shell": ""}[session.agent]
         summary = " ".join((session.summary or session.title).split())
         summary = re.sub(r"^[\u2800-\u28ff✳●*]+\s*", "", summary)

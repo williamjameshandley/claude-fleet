@@ -8,6 +8,7 @@ import subprocess
 
 from .config import HUB, RUNTIME, hosts
 from .protocol import decode_message, encode
+from .model import key_host
 
 
 class Fleet:
@@ -118,7 +119,7 @@ class Fleet:
                     group.create_task(self.collect(host))
 
     async def preview(self, key, columns=0, lines=0):
-        host = key.split(":", 1)[0]
+        host = key_host(key)
         if host in self.unavailable:
             raise RuntimeError(f"{host} is disconnected")
         process = self.processes[host]
