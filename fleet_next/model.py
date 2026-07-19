@@ -7,9 +7,12 @@ class ServerRef:
     socket: str
     pid: int
     started: int
+    kind: str = "tmux"
 
     @property
     def key(self):
+        if self.kind == "alan":
+            return f"alan:{self.host}"
         return f"{self.host}:{self.socket}:{self.pid}:{self.started}"
 
 
@@ -40,6 +43,7 @@ class Session:
     summary: str = ""
     recency: int = 0
     transcript_id: str = ""
+    attachment: dict | None = None
 
     @property
     def agent(self):
@@ -62,3 +66,7 @@ class Session:
         if self.agent == "codex" and any(x in title for x in ("working", "thinking")):
             return "working"
         return "waiting"
+
+
+def key_host(key):
+    return key.split(":", 2)[1] if key.startswith("alan:") else key.split(":", 1)[0]

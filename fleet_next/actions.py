@@ -11,6 +11,8 @@ from .daemon import preview as pane_preview, snapshot
 from .protocol import decode
 from .protocol import decode_message
 from . import viewer
+from .alan import (spawn_claude, spawn_codex, spawn_python,
+                   rename as alan_rename, set_attention as alan_attention)
 
 
 def host_command(host, *command, capture_output=False):
@@ -59,25 +61,53 @@ def created_key(host, name):
 
 def create():
     host = desktop_input("host", hosts(), fixed=True)
-    agent = desktop_input("agent", ("claude", "codex", "shell"), fixed=True)
+    agent = desktop_input("agent", ("claude", "codex", "python", "shell"), fixed=True)
     name = desktop_input("session name")
     cwd = desktop_input("directory", (str(Path.home()),)) or str(Path.home())
     if not name:
         raise SystemExit("session name is required")
-    host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
-                 *agent_command(agent, name))
-    viewer.request("main", created_key(host, name))
+    if agent in ("python", "codex", "claude"):
+        if host != os.uname().nodename:
+            result = host_command(host, "fleet-next", "alan-spawn", agent, name, cwd,
+                                  capture_output=True)
+            key = f"alan:{host}:{result.stdout.strip()}"
+        else:
+            spawn = {"python": spawn_python, "codex": spawn_codex,
+                     "claude": spawn_claude}[agent]
+            key = f"alan:{host}:{spawn(name, cwd)}"
+    else:
+        host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
+                     *agent_command(agent, name))
+        key = created_key(host, name)
+    viewer.request("main", key)
 
 
 def rename(key):
     session = find(key)
     name = desktop_input(f"rename {session.name}")
     if name:
-        host_command(session.ref.server.host, "fleet-next", "mutate", key, "rename", name)
+        if session.ref.server.kind == "alan":
+            if session.ref.server.host == os.uname().nodename:
+                alan_rename(session.ref.session_id, name)
+            else:
+                host_command(session.ref.server.host, "fleet-next", "alan-rename",
+                             session.ref.session_id, name)
+        else:
+            host_command(session.ref.server.host, "fleet-next", "mutate", key, "rename", name)
 
 
 def done(key):
     session = find(key)
+    if session.ref.server.kind == "alan":
+        for slot, source in viewer.slots():
+            if source == key:
+                viewer.request(slot, "")
+        if session.ref.server.host == os.uname().nodename:
+            alan_attention(session.ref.session_id, "done")
+        else:
+            host_command(session.ref.server.host, "fleet-next", "alan-attention",
+                         session.ref.session_id, "done")
+        return
     for slot, source in viewer.slots():
         if source == key:
             viewer.request(slot, "")
@@ -97,7 +127,11 @@ def dismiss_source(key):
 
 
 def preview(key, columns=0, lines=0):
-    print(pane_preview(key, columns, lines), end="")
+    session = find(key)
+    if session.ref.server.kind == "alan":
+        print(f"{session.name}\n{session.agent} · {session.state}\n{session.cwd}")
+    else:
+        print(pane_preview(key, columns, lines), end="")
 
 
 def history():

@@ -4,13 +4,8 @@ import threading
 from collections import deque
 from pathlib import Path
 
-import numpy as np
-
-
 RATE = 16000
 FRAME = 1280
-SILENCE_LEVEL = 60
-SILENCE_FRAMES = 15
 
 
 class Capture:
@@ -52,36 +47,6 @@ class Capture:
         with subprocess.Popen(command, stdin=subprocess.PIPE) as encoder:
             while True:
                 encoder.stdin.write(self.queue.get().tobytes())
-
-
-class Segmenter:
-    def __init__(self, complete):
-        self.complete = complete
-        self.enabled = False
-        self.blocks = []
-        self.silence = 0
-
-    def feed(self, block):
-        if not self.enabled:
-            return
-        self.blocks.append(block)
-        level = np.sqrt(np.mean(block.astype(float) ** 2))
-        self.silence = self.silence + 1 if level < SILENCE_LEVEL else 0
-        if self.silence == SILENCE_FRAMES and len(self.blocks) > SILENCE_FRAMES:
-            speech = self.blocks[:-SILENCE_FRAMES]
-            self.blocks = []
-            self.silence = 0
-            self.complete(np.concatenate(speech).astype("int16").tobytes())
-
-    def start(self, blocks=()):
-        self.blocks = list(blocks)
-        self.silence = 0
-        self.enabled = True
-
-    def stop(self):
-        self.enabled = False
-        self.blocks = []
-        self.silence = 0
 
 
 class WakeDetector:

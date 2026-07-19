@@ -11,6 +11,8 @@ from .quota import read as quota_read, update as quota_update
 from .tmux import capture, event_stream, inventory, mutate
 from .config import RUNTIME, hosts
 from .transcripts import history as transcript_history, resume
+from .alan import (spawn_claude, spawn_codex, spawn_python,
+                   rename as alan_rename, set_attention as alan_attention)
 
 
 def events(args):
@@ -97,6 +99,18 @@ def main():
     item = command("attach", lambda a: viewer.attach(a.key))
     item.add_argument("key")
     command("create", lambda _: actions.create())
+    item = command("alan-spawn", lambda a: print(
+        {"python": spawn_python, "codex": spawn_codex,
+         "claude": spawn_claude}[a.agent](a.name, a.cwd)))
+    item.add_argument("agent", choices=("python", "codex", "claude"))
+    item.add_argument("name")
+    item.add_argument("cwd")
+    item = command("alan-rename", lambda a: alan_rename(a.addr, a.label))
+    item.add_argument("addr")
+    item.add_argument("label")
+    item = command("alan-attention", lambda a: alan_attention(a.addr, a.attention))
+    item.add_argument("addr")
+    item.add_argument("attention", choices=("tracked", "done"))
     for name, fn in (("rename", actions.rename), ("done", actions.done),
                      ("dismiss-source", actions.dismiss_source)):
         item = command(name, lambda a, fn=fn: fn(a.key))

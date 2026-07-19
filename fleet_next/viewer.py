@@ -9,6 +9,7 @@ import re
 from .config import HUB, RUNTIME, ssh_environment
 from .tmux import inventory
 from .remote import find
+from .model import key_host
 
 
 SLOT = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -46,7 +47,7 @@ def request(slot, key):
             focus = shlex.join(("env", "DISPLAY=:0", "i3-msg",
                                 '[instance="fleet-main"] focus'))
             subprocess.run(["ssh", "-T", "-o", "BatchMode=yes", workstation,
-                            focus], check=True,
+                            focus], check=True, env=ssh_environment(),
                            stdout=subprocess.DEVNULL)
         return
     if key:
@@ -69,8 +70,11 @@ def show(key, slot=None):
     session = find(key)
     if session.attention == "done":
         host = session.ref.server.host
-        command = shlex.join(("fleet-next", "mutate", key, "attention", "tracked"))
-        argv = (["fleet-next", "mutate", key, "attention", "tracked"]
+        operation = (("fleet-next", "alan-attention", session.ref.session_id, "tracked")
+                     if session.ref.server.kind == "alan" else
+                     ("fleet-next", "mutate", key, "attention", "tracked"))
+        command = shlex.join(operation)
+        argv = (list(operation)
                 if host == os.uname().nodename else
                 ["ssh", "-T", "-o", "BatchMode=yes", host, command])
         subprocess.run(argv, check=True)
@@ -97,7 +101,7 @@ def show(key, slot=None):
 
 
 def command(key):
-    host = key.split(":", 1)[0]
+    host = key_host(key)
     local = os.uname().nodename
     attach = ["fleet-next", "attach", key]
     return attach if host == local else ["ssh", "-tt", "-o", "BatchMode=yes", host,
@@ -159,7 +163,23 @@ def serve(slot):
 
 
 def attach(key):
-    host = key.split(":", 1)[0]
+    session = find(key)
+    if session.ref.server.kind == "alan":
+        attachment = session.attachment or {}
+        if attachment.get("kind") == "jupyter":
+            os.execvp("jupyter", ["jupyter", "console", "--existing",
+                                   attachment["connection_file"]])
+            return
+        if attachment.get("kind") == "codex":
+            os.execvp("codex", ["codex", "resume", "--remote",
+                                "unix://" + attachment["socket"],
+                                attachment["thread_id"]])
+            return
+        if attachment.get("kind") == "tmux":
+            os.execvp("tmux", ["tmux", "attach-session", "-t", attachment["session"]])
+            return
+        raise SystemExit(f"actor {session.ref.session_id} has no supported attachment")
+    host = session.ref.server.host
     current = [s for s in inventory(host) if s.ref.key == key]
     if len(current) != 1:
         raise SystemExit(f"session identity changed: {key}")

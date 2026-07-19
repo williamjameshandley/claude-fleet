@@ -1,11 +1,13 @@
+import io
+import json
 import tempfile
+import threading
 import unittest
-
-import numpy as np
+from unittest.mock import patch
 
 from alan_composer.archive import Archive
-from alan_composer.audio import Segmenter
 from alan_composer.model import Composition, Mode, classify
+from alan_composer.transcribe import Transcriber
 
 
 class VoiceModelTests(unittest.TestCase):
@@ -35,19 +37,45 @@ class VoiceModelTests(unittest.TestCase):
             self.assertEqual(len(archive.events.read_text().splitlines()), 2)
             self.assertEqual(archive.latest()["draft"], "recover me")
 
-    def test_segmenter_preroll_and_stop(self):
-        complete = []
-        segmenter = Segmenter(complete.append)
-        speech = np.full(1280, 1000, dtype="int16")
-        silence = np.zeros(1280, dtype="int16")
-        segmenter.start([speech])
-        for _ in range(15):
-            segmenter.feed(silence)
-        self.assertTrue(complete[0].startswith(speech.tobytes()))
-        segmenter.start([speech])
-        segmenter.stop()
-        self.assertEqual(segmenter.blocks, [])
+    def test_alan_home_stream_is_full_duplex(self):
+        received = []
+        done = threading.Event()
 
+        class FakeSocket:
+            def __init__(self):
+                self.sent = []
+
+            def sendall(self, data):
+                self.sent.append(data)
+
+            def makefile(self):
+                return io.StringIO(
+                    '{"ok": true}\n'
+                    '{"type":"utterance","text":"hello"}\n')
+
+            def shutdown(self, _direction):
+                done.set()
+
+        sock = FakeSocket()
+        auth = io.BytesIO(
+            b'endpoint_id="composer-boltzmann"\nauth_token="secret"\n')
+        transcriber = Transcriber(received.append)
+        with patch("urllib.request.urlopen", return_value=auth), \
+                patch("socket.create_connection", return_value=sock):
+            transcriber.start()
+            transcriber.feed(memoryview(b"pcm"))
+            transcriber.stop()
+
+        self.assertTrue(done.wait(1))
+        header = json.loads(sock.sent[0])
+        self.assertEqual(header["protocol"], "alan-audio/2")
+        self.assertEqual(header["endpoint_id"], "composer-boltzmann")
+        self.assertEqual(sock.sent[1], b"pcm")
+        for _ in range(100):
+            if received:
+                break
+            done.wait(.01)
+        self.assertEqual(received, ["hello"])
 
 if __name__ == "__main__":
     unittest.main()

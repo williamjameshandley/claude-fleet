@@ -14,6 +14,8 @@ def encode(sessions, usage=None, unavailable=None):
         "agent_name": s.agent_name, "reported_state": s.reported_state,
         "summary": s.summary, "recency": s.recency,
         "transcript_id": s.transcript_id,
+        "attachment": s.attachment,
+        "source_kind": s.ref.server.kind,
     } for s in sessions]
     return json.dumps({"sessions": items, "usage": usage or {},
                        "unavailable": unavailable or []}, separators=(",", ":"))
@@ -29,6 +31,7 @@ def decode_message(line):
     for item in message["sessions"]:
         raw = item.pop("server")
         sid = item.pop("id")
-        ref = SessionRef(ServerRef(raw["host"], raw["socket"], raw["pid"], raw["started"]), sid)
+        kind = item.pop("source_kind", raw.pop("kind", "tmux"))
+        ref = SessionRef(ServerRef(raw["host"], raw["socket"], raw["pid"], raw["started"], kind), sid)
         sessions.append(Session(ref=ref, **item))
     return sessions, message["usage"], message["unavailable"]

@@ -46,7 +46,7 @@ def rows(include_header=True):
                   "x" if session.attention == "done" else
                   {"needs-action": "!", "working": "*", "waiting": ".",
                    "finished": "-"}[session.state])
-        agent = {"claude": "Claude", "codex": "OpenAI", "gemini": "Gemini",
+        agent = {"claude": "Claude", "codex": "OpenAI", "python": "Python", "gemini": "Gemini",
                  "multiple": "Agents", "shell": ""}[session.agent]
         summary = " ".join((session.summary or session.title).split())
         summary = re.sub(r"^[\u2800-\u28ff✳●*]+\s*", "", summary)
@@ -86,7 +86,7 @@ def muster():
         "--bind=/:enable-search+toggle-sort+show-input+change-prompt(Search: )+unbind(/,c,r,d,x,j,k)+rebind(esc)",
         "--bind=esc:disable-search+toggle-sort+clear-query+hide-input+change-prompt(> )+unbind(esc)+rebind(/,c,r,d,x,j,k)",
         "--bind=j:down,k:up",
-        f"--bind=load:pos({cursor()})",
+        f"--bind=load:pos({cursor()})+unbind(load)",
         "--bind=enter:execute-silent(fleet-next show --slot main {1})",
         "--bind=left-click:execute-silent(fleet-next show --slot main {1})",
         "--bind=double-click:execute-silent(fleet-next show --slot main {1})",
