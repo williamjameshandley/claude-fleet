@@ -206,10 +206,14 @@ def codex_transcript(pids):
     return transcript("codex", select_codex(targets, resumed))
 
 
+def indexed_claude_agents(output):
+    return {item["pid"]: item for item in json.loads(output) if item.get("pid") is not None}
+
+
 def observe(sessions):
-    claude = {item["pid"]: item for item in json.loads(subprocess.run(
+    claude = indexed_claude_agents(subprocess.run(
         ["claude", "agents", "--json"], text=True, capture_output=True,
-        check=True).stdout)}
+        check=True).stdout)
     children = process_tree()
     rows = []
     panes = subprocess.run(["tmux", "list-panes", "-a", "-F", PANE_FORMAT],
