@@ -16,7 +16,6 @@ optdepends=(
     'python-sounddevice: wake-dryrun harness (the mic machine)'
     'python-numpy: wake-dryrun harness (the mic machine)'
     'python-gobject: Alan composer interface (the mic machine)'
-    'python-groq: Alan transcription (the mic machine)'
     'xdotool: Alan destination focus restoration (the mic machine)'
     'ffmpeg: Alan ambient FLAC archive (the mic machine)'
 )
@@ -42,7 +41,7 @@ pkgver() {
 
 package() {
   install -Dm755 "$startdir/fleet-next" "$pkgdir/usr/bin/fleet-next"
-  for script in fleet-muster fleet-viewer fleet-view fleet-deck fleet-office fleet-commander; do
+  for script in fleet-muster fleet-viewer fleet-view fleet-deck fleet-office fleet-commander fleet-snapshot; do
     install -Dm755 "$startdir/$script" "$pkgdir/usr/bin/$script"
   done
   install -Dm755 "$startdir/fleet-usage" "$pkgdir/usr/bin/fleet-usage"
