@@ -198,12 +198,12 @@ class IdentityTests(unittest.TestCase):
              mock.patch("fleet_next.actions.host_command") as run, \
              mock.patch("fleet_next.actions.created_key",
                         return_value="source-key"), \
-             mock.patch("fleet_next.actions.viewer.request") as show:
+             mock.patch("fleet_next.actions.viewer.open_main") as show:
             actions.create()
         run.assert_called_once_with(
             host, "tmux", "new-session", "-d", "-s", "analysis", "-c", "/work",
             "codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never")
-        show.assert_called_once_with("main", "source-key")
+        show.assert_called_once_with("source-key")
 
     def test_tmux_name_normalization_preserves_spaces(self):
         self.assertEqual(session_name(" Test session. "), "Test session")
@@ -265,8 +265,7 @@ class IdentityTests(unittest.TestCase):
     def test_muster_always_opens_the_global_main_viewer(self):
         source = (Path(__file__).parents[1] / "fleet_next/ui.py").read_text()
         self.assertIn("fleet-next show --slot main {1}", source)
-        self.assertIn("load:pos({cursor()})", source)
-        self.assertNotIn("unbind(load)", source)
+        self.assertIn("load:pos({cursor()})+unbind(load)", source)
         self.assertIn('"--no-sort"', source)
         self.assertIn("enable-search+toggle-sort", source)
         self.assertNotIn('"--nth=2.."', source)

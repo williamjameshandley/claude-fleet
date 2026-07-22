@@ -97,7 +97,7 @@ def create():
         raise SystemExit("session name is required")
     host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
                  *agent_command(agent, name))
-    viewer.request("main", created_key(host, name))
+    viewer.open_main(created_key(host, name))
 
 
 def rename_tab(key):

@@ -66,6 +66,12 @@ def slots():
     return found
 
 
+def open_main(key):
+    request("main", key)
+    from .ui import select
+    select(key)
+
+
 def show(key, slot=None):
     session = find(key)
     if session.attention == "done":
@@ -84,21 +90,19 @@ def show(key, slot=None):
     available = slots()
     for name, source in available:
         if source == key:
-            request(name, key)
             if name == "main":
-                from .ui import select
-                select(key)
+                open_main(key)
+            else:
+                request(name, key)
             return
     if slot:
-        request(slot, key)
         if slot == "main":
-            from .ui import select
-            select(key)
+            open_main(key)
+        else:
+            request(slot, key)
         return
     if len(available) == 1 and available[0][0] == "main":
-        request("main", key)
-        from .ui import select
-        select(key)
+        open_main(key)
         return
     for name, source in available:
         if not source:
