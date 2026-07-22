@@ -235,6 +235,12 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(recency(working), 10)
         self.assertEqual(recency(waiting), 20)
 
+    def test_working_without_observed_human_activity_does_not_follow_output(self):
+        working = Session(**{**self.session("newton").__dict__,
+                             "reported_state": "working", "recency": 20,
+                             "human_activity": 0})
+        self.assertEqual(recency(working), 0)
+
     def test_working_sorts_before_waiting_and_done(self):
         self.assertLess(STATE_ORDER["working"], STATE_ORDER["waiting"])
 
