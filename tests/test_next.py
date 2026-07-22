@@ -191,6 +191,18 @@ class IdentityTests(unittest.TestCase):
         execute.assert_called_once_with(
             "tmux", ["tmux", "attach-session", "-t", "fleet@actor-claude-1"])
 
+    def test_codex_tmux_attach_enables_native_nested_mouse_routing(self):
+        session = self.session(os.uname().nodename)
+        with mock.patch("fleet_next.viewer.find", return_value=session), \
+             mock.patch("fleet_next.viewer.inventory", return_value=[session]), \
+             mock.patch("subprocess.run") as run, \
+             mock.patch("os.execvp") as execute:
+            viewer.attach(session.ref.key)
+        run.assert_called_once_with(
+            ["tmux", "set-option", "-t", "$1", "mouse", "on"], check=True)
+        execute.assert_called_once_with(
+            "tmux", ["tmux", "attach-session", "-t", "$1"])
+
     def test_create_opens_a_real_tmux_session_in_main(self):
         host = os.uname().nodename
         with mock.patch("fleet_next.actions.muster_input",
@@ -267,8 +279,8 @@ class IdentityTests(unittest.TestCase):
                       muster)
         self.assertIn("new-session -d -s fleet@main", main)
         self.assertIn("set-option -t fleet@main prefix None", main)
-        self.assertIn("set-option -u -t fleet@main mouse", main)
-        self.assertNotIn("set-option -t fleet@main mouse off", main)
+        self.assertIn("set-option -t fleet@main mouse on", main)
+        self.assertIn("set-option -t fleet@muster mouse off", muster)
         self.assertIn("fleet-next viewer-status main", main)
         self.assertIn("ConditionHost=lovelace", service)
 
