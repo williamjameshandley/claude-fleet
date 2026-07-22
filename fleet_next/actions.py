@@ -97,7 +97,13 @@ def create():
         raise SystemExit("session name is required")
     host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
                  *agent_command(agent, name))
-    viewer.request("main", created_key(host, name))
+    viewer.open_main(created_key(host, name))
+
+
+def rename_tab(key):
+    command = shlex.join(("exec", "fleet-next", "rename", key))
+    subprocess.run(["tmux", "new-window", "-t", "fleet@muster", "-n", "rename",
+                    command], check=True)
 
 
 def rename_tab(key):
