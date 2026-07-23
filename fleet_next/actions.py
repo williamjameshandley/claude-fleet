@@ -88,16 +88,22 @@ def create_tab():
 
 def create():
     host = muster_input("host", hosts())
-    agent = muster_input("agent", ("claude", "codex", "shell"),
+    agent = muster_input("agent", ("claude", "codex", "python", "shell"),
                          context=host)
     name = session_name(muster_input("name", context=f"{host} · {agent}"))
     cwd = muster_input("directory", initial=str(Path.home()),
                        context=f"{host} · {agent} · {name}") or str(Path.home())
     if not name:
         raise SystemExit("session name is required")
-    host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
-                 *agent_command(agent, name))
-    viewer.open_main(created_key(host, name))
+    if agent == "shell":
+        host_command(host, "tmux", "new-session", "-d", "-s", name, "-c", cwd,
+                     *agent_command(agent, name))
+        key = created_key(host, name)
+    else:
+        result = host_command(host, "fleet-next", "alan-spawn", agent, name, cwd,
+                              capture_output=True)
+        key = f"alan:{host}:{result.stdout.strip()}"
+    viewer.open_main(key)
 
 
 def rename_tab(key):

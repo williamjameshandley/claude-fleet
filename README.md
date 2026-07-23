@@ -72,7 +72,7 @@ fleet-next show SOURCE          focus/open a source
 fleet-next next-waiting         advance main to the next waiting source
 fleet-next show SOURCE --slot S explicit replacement
 fleet-next dismiss --slot S     detach a viewer only
-fleet-next create               create Claude, Codex or shell work inside Muster
+fleet-next create               create Alan Claude, Codex, Python, or a plain shell
 fleet-next rename SOURCE        rename the native source
 fleet-next done SOURCE          shelve its attention loop
 fleet-view                      laptop 50:50 launcher
@@ -101,6 +101,11 @@ invalidate healthy tmux inventory on the same host.
 Alan lifecycle actors are Python, Codex and Claude (plus Alan's direct `llm`
 type, which has no Fleet attachment). There is no native Alan Gemini actor.
 Already-running standalone Gemini terminals remain ordinary legacy tmux rows.
+Muster creates new Claude, Codex and Python work through Alan, so the actor is
+durable and asynchronously addressable before Fleet opens its preferred viewer.
+Only a plain shell is created directly as a tmux session. Existing standalone
+vendor terminals remain ordinary tmux rows; Fleet does not silently migrate or
+replace their native conversations.
 
 ## Development
 

@@ -203,18 +203,30 @@ class IdentityTests(unittest.TestCase):
         execute.assert_called_once_with(
             "tmux", ["tmux", "attach-session", "-t", "$1"])
 
-    def test_create_opens_a_real_tmux_session_in_main(self):
+    def test_create_materializes_codex_as_an_alan_actor(self):
         host = os.uname().nodename
         with mock.patch("fleet_next.actions.muster_input",
                         side_effect=[host, "codex", "analysis.", "/work"]), \
              mock.patch("fleet_next.actions.host_command") as run, \
-             mock.patch("fleet_next.actions.created_key",
-                        return_value="source-key"), \
+             mock.patch("fleet_next.actions.viewer.open_main") as show:
+            run.return_value.stdout = "codex-deadbeef\n"
+            actions.create()
+        run.assert_called_once_with(
+            host, "fleet-next", "alan-spawn", "codex", "analysis", "/work",
+            capture_output=True)
+        show.assert_called_once_with(f"alan:{host}:codex-deadbeef")
+
+    def test_create_keeps_plain_shells_as_tmux_sessions(self):
+        host = os.uname().nodename
+        with mock.patch("fleet_next.actions.muster_input",
+                        side_effect=[host, "shell", "terminal", "/work"]), \
+             mock.patch("fleet_next.actions.host_command") as run, \
+             mock.patch("fleet_next.actions.created_key", return_value="source-key"), \
              mock.patch("fleet_next.actions.viewer.open_main") as show:
             actions.create()
         run.assert_called_once_with(
-            host, "tmux", "new-session", "-d", "-s", "analysis", "-c", "/work",
-            "codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never")
+            host, "tmux", "new-session", "-d", "-s", "terminal", "-c", "/work",
+            os.environ.get("SHELL", "/bin/sh"))
         show.assert_called_once_with("source-key")
 
     def test_tmux_name_normalization_preserves_spaces(self):
