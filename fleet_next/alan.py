@@ -133,24 +133,24 @@ class Watcher:
                 time.sleep(1)
 
 
-def inventory(host, actors, attention=None, viewer_activity=None):
+def inventory(host, actors, attention=None):
     source = ServerRef(host, "", 0, 0, "alan")
     attention = attention or {}
-    viewer_activity = viewer_activity or {}
     sessions = []
     for actor in actors:
         attachment = actor.get("attachment") or {"kind": "none"}
         if attachment.get("kind") == "none":
             continue
         state = actor.get("state", "live")
+        reported_state = ("working" if state in {"busy", "working"} else
+                          "needs-action" if state == "needs-action" else "waiting")
         sessions.append(Session(
             SessionRef(source, actor["addr"]), actor.get("label") or actor["addr"],
             0, 0, 0, 1, attachment.get("kind", "alan"), actor.get("label", ""),
             actor.get("cwd") or "", attention.get(actor["addr"], "tracked"),
-            actor.get("type", "alan"),
-            "working" if state in {"busy", "working"} else "waiting",
+            actor.get("type", "alan"), reported_state,
             "", 0, (actor.get("native") or {}).get("id", ""), attachment,
-            viewer_activity.get(attachment.get("session", ""), 0)))
+            actor.get("human_activity", 0)))
     return sessions
 
 
@@ -175,3 +175,39 @@ def set_attention(addr, attention):
         raise ValueError(f"invalid Fleet attention {attention!r}")
     request({"op": "send", "to": "fleet", "payload": {
         "kind": "fleet_attention", "actor": addr, "attention": attention}})
+
+
+def refresh(addr):
+    actors = request({"op": "list"})["actors"]
+    actor = next((item for item in actors if item["addr"] == addr), None)
+    if not actor:
+        raise RuntimeError(f"Alan actor disappeared: {addr}")
+    if actor.get("type") not in {"claude", "codex"}:
+        raise RuntimeError(f"refresh does not support {actor.get('type')}")
+    native_id = (actor.get("native") or {}).get("id")
+    if not native_id:
+        raise RuntimeError("refresh requires a durable native identity")
+    result = request({"op": "refresh", "addr": addr})
+    if result["addr"] != addr:
+        raise RuntimeError(f"Alan refresh changed actor identity: {addr}")
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        actors = request({"op": "list"})["actors"]
+        actor = next((item for item in actors if item["addr"] == addr), None)
+        if actor:
+            attachment = actor.get("attachment") or {"kind": "none"}
+            if ((actor.get("native") or {}).get("id") == native_id and
+                    attachment.get("kind") != "none"):
+                return
+        time.sleep(.1)
+    raise RuntimeError(f"Alan refresh did not restore attachment for {addr}")
+
+
+def attachment_usable(addr, native_id):
+    actors = request({"op": "list"})["actors"]
+    actor = next((item for item in actors if item["addr"] == addr), None)
+    if not actor:
+        return False
+    attachment = actor.get("attachment") or {"kind": "none"}
+    return ((actor.get("native") or {}).get("id") == native_id and
+            attachment.get("kind") != "none")
