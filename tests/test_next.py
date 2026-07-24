@@ -402,6 +402,22 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(reopen.call_args_list, [
             mock.call("main", session.ref.key), mock.call("side", session.ref.key)])
 
+    def test_refresh_waits_for_global_projection_before_reopening(self):
+        actor = alan_inventory("lovelace", [{
+            "addr": "claude-1", "type": "claude", "state": "waiting",
+            "native": {"id": "session-1"},
+            "attachment": {"kind": "tmux", "session": "fleet@actor-claude-1"},
+        }])[0]
+        with mock.patch("fleet_next.actions.find",
+                        side_effect=[actor, SystemExit("gone"), actor]), \
+             mock.patch("fleet_next.actions.time.sleep"), \
+             mock.patch("fleet_next.actions.viewer.slots",
+                        return_value=[("main", actor.ref.key)]), \
+             mock.patch("fleet_next.actions.host_command"), \
+             mock.patch("fleet_next.actions.viewer.request") as reopen:
+            actions.refresh(actor.ref.key)
+        reopen.assert_called_once_with("main", actor.ref.key)
+
     def test_refresh_local_dispatches_alan_by_exact_tagged_key(self):
         host = os.uname().nodename
         with mock.patch("fleet_next.actions.alan_refresh") as refresh:

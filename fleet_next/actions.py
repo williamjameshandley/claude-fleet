@@ -186,6 +186,23 @@ def refresh_check(key, native_id):
             raise SystemExit(f"session identity changed: {key}")
 
 
+def wait_for_projection(key, native_id):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            session = find(key)
+        except SystemExit:
+            time.sleep(.1)
+            continue
+        attachment = session.attachment or {}
+        if (session.ref.server.kind != "alan" or
+                (session.transcript_id == native_id and
+                 attachment.get("kind") not in {None, "none"})):
+            return
+        time.sleep(.1)
+    raise RuntimeError(f"Fleet projection did not restore {key}")
+
+
 def refresh(key):
     session = find(key)
     shown = [slot for slot, source in viewer.slots() if source == key]
@@ -203,6 +220,7 @@ def refresh(key):
                 viewer.request(slot, key)
         raise failure
     else:
+        wait_for_projection(key, session.transcript_id)
         for slot in shown:
             viewer.request(slot, key)
 
