@@ -12,6 +12,9 @@ from .protocol import decode
 from .protocol import decode_message
 from . import viewer
 from .alan import rename as alan_rename, set_attention as alan_attention
+from .alan import refresh as alan_refresh
+from .alan import attachment_usable as alan_attachment_usable
+from .tmux import refresh as tmux_refresh, inventory as tmux_inventory
 
 
 def host_command(host, *command, capture_output=False):
@@ -158,6 +161,63 @@ def dismiss_source(key):
                     "Viewer dismissed; source session is still running"])
 
 
+def refresh_local(key):
+    if key.startswith("alan:"):
+        _, host, addr = key.split(":", 2)
+        if host != os.uname().nodename:
+            raise SystemExit(f"identity is for {host}, not {os.uname().nodename}")
+        alan_refresh(addr)
+    else:
+        tmux_refresh(key)
+
+
+def refresh_check(key, native_id):
+    if key.startswith("alan:"):
+        _, host, addr = key.split(":", 2)
+        if host != os.uname().nodename:
+            raise SystemExit(f"identity is for {host}, not {os.uname().nodename}")
+        if not alan_attachment_usable(addr, native_id):
+            raise SystemExit(f"actor {addr} has no usable current attachment")
+    else:
+        host = key.split(":", 1)[0]
+        if host != os.uname().nodename:
+            raise SystemExit(f"identity is for {host}, not {os.uname().nodename}")
+        if not any(session.ref.key == key for session in tmux_inventory(host)):
+            raise SystemExit(f"session identity changed: {key}")
+
+
+def refresh(key):
+    session = find(key)
+    shown = [slot for slot, source in viewer.slots() if source == key]
+    try:
+        host_command(session.ref.server.host, "fleet-next", "refresh-local", key,
+                     capture_output=True)
+    except subprocess.CalledProcessError as failure:
+        try:
+            host_command(session.ref.server.host, "fleet-next", "refresh-check", key,
+                         session.transcript_id, capture_output=True)
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            for slot in shown:
+                viewer.request(slot, key)
+        raise failure
+    else:
+        for slot in shown:
+            viewer.request(slot, key)
+
+
+def refresh_report(key):
+    try:
+        refresh(key)
+    except (RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+        reason = (error.stderr.strip() if isinstance(error, subprocess.CalledProcessError)
+                  and error.stderr else str(error))
+        subprocess.run(["tmux", "display-message", "-t", "fleet@muster",
+                        f"Refresh failed: {reason}"])
+        raise
+
+
 def next_waiting_key(sessions, active):
     waiting = [session for session in sessions
                if session.attention != "done" and session.state == "waiting"]
@@ -236,7 +296,7 @@ def arrive(profile, available=False):
                      and session.ref.key not in shown),
                     key=lambda session: ({"needs-action": 0, "working": 1,
                                           "waiting": 2, "finished": 3}.get(session.state, 2),
-                                         -(session.recency or session.activity)))
+                                         -session.human_activity))
     for slot, session in zip(free, ranked):
         viewer.request(slot, session.ref.key)
 
@@ -265,7 +325,7 @@ def context():
         "slots": [{"slot": slot, "source": source} for slot, source in viewer.slots()],
         "sessions": [{"source": s.ref.key, "host": s.ref.server.host, "name": s.name,
                       "agent": s.agent, "state": s.state, "attention": s.attention,
-                      "summary": s.summary, "recency": s.recency or s.activity}
+                      "summary": s.summary, "recency": s.human_activity}
                      for s in sessions],
     }
     print(json.dumps(data, indent=2))

@@ -50,6 +50,48 @@ def mutate(key, operation, arguments):
         raise SystemExit(f"stale source identity: {key}")
 
 
+def refresh(key):
+    host, socket, pid, started, session_id = split_key(key)
+    if host != os.uname().nodename:
+        raise SystemExit(f"identity is for {host}, not {os.uname().nodename}")
+    matches = [item for item in observe(inventory(host)) if item.ref.key == key]
+    if len(matches) != 1:
+        raise SystemExit(f"stale source identity: {key}")
+    item = matches[0]
+    if item.windows != 1:
+        raise SystemExit("refresh requires exactly one window")
+    if item.agent not in {"claude", "codex"}:
+        raise SystemExit(f"refresh does not support {item.agent}")
+    if item.state != "waiting":
+        raise SystemExit(f"refresh requires waiting state, got {item.state}")
+    if not item.transcript_id:
+        raise SystemExit("refresh requires a durable transcript identity")
+    tmux = server()
+    session = TmuxSession.from_session_id(tmux, session_id)
+    if (session.socket_path, int(session.pid), int(session.start_time)) != (socket, pid, started):
+        raise SystemExit(f"stale source identity: {key}")
+    panes = [pane for window in session.windows for pane in window.panes]
+    if len(panes) != 1:
+        raise SystemExit("refresh requires exactly one agent pane")
+    argv = (["claude", "--dangerously-skip-permissions", "--resume", item.transcript_id]
+            if item.agent == "claude" else
+            ["codex", "--sandbox", "danger-full-access", "--ask-for-approval", "never",
+             "resume", item.transcript_id])
+    checks = [f"#{{==:#{{socket_path}},{socket}}}", f"#{{==:#{{pid}},{pid}}}",
+              f"#{{==:#{{start_time}},{started}}}",
+              f"#{{==:#{{session_id}},{session_id}}}",
+              "#{==:#{session_windows},1}", "#{==:#{window_panes},1}",
+              f"#{{==:#{{pane_id}},{panes[0].pane_id}}}"]
+    condition = checks[-1]
+    for check in reversed(checks[:-1]):
+        condition = f"#{{&&:{check},{condition}}}"
+    command = ["respawn-pane", "-k", "-t", panes[0].pane_id, "-c", item.cwd, *argv]
+    result = tmux.cmd("if-shell", "-t", panes[0].pane_id, "-F", condition,
+                      shlex.join(command), "display-message -p FLEET_STALE")
+    if result.stdout and result.stdout[0] == "FLEET_STALE":
+        raise SystemExit(f"stale source identity: {key}")
+
+
 def capture(key, columns=0, lines=0):
     host, socket, pid, started, session_id = split_key(key)
     if host != os.uname().nodename:
@@ -70,7 +112,7 @@ def capture(key, columns=0, lines=0):
     return result.stdout
 
 
-def inventory(host, include_fleet=False):
+def inventory(host):
     tmux = server()
     metadata = {sid: (attention, int(activity or 0))
                 for sid, attention, activity in (line.split("\t") for line in tmux.cmd(
@@ -86,7 +128,7 @@ def inventory(host, include_fleet=False):
                      "@fleet_human_activity", str(activity))
     sessions = []
     for item in tmux.sessions:
-        if item.session_name.startswith("fleet@") and not include_fleet:
+        if item.session_name.startswith("fleet@"):
             continue
         source = ServerRef(host, item.socket_path, int(item.pid), int(item.start_time))
         sessions.append(Session(
@@ -148,14 +190,7 @@ def event_stream(host, consumer=None):
             if alan.error and alan.error != alan_error:
                 print(alan.error, file=sys.stderr, flush=True)
             alan_error = alan.error
-            tmux_sessions = inventory(host, include_fleet=True)
-            viewer_activity = {session.name: session.human_activity
-                               for session in tmux_sessions
-                               if session.name.startswith("fleet@")}
-            current = ([session for session in tmux_sessions
-                        if not session.name.startswith("fleet@")] +
-                       alan_inventory(host, alan.actors, alan.attention,
-                                      viewer_activity))
+            current = inventory(host) + alan_inventory(host, alan.actors, alan.attention)
             try:
                 current = observe(current)
                 agent_cache = {session.ref: session for session in current}

@@ -74,6 +74,7 @@ fleet-next show SOURCE --slot S explicit replacement
 fleet-next dismiss --slot S     detach a viewer only
 fleet-next create               create Alan Claude, Codex, Python, or a plain shell
 fleet-next rename SOURCE        rename the native source
+fleet-next refresh SOURCE       replace one idle Claude/Codex runtime in place
 fleet-next done SOURCE          shelve its attention loop
 fleet-view                      laptop 50:50 launcher
 fleet-deck                      home multi-screen launcher
