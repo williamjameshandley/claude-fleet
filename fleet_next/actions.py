@@ -233,7 +233,7 @@ def refresh_report(key):
                   and error.stderr else str(error))
         subprocess.run(["tmux", "display-message", "-t", "fleet@muster",
                         f"Refresh failed: {reason}"])
-        raise
+        raise SystemExit(reason)
 
 
 def next_waiting_key(sessions, active):

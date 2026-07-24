@@ -504,7 +504,7 @@ class IdentityTests(unittest.TestCase):
         failure = subprocess.CalledProcessError(1, ["ssh"], stderr="actor_not_idle\n")
         with mock.patch("fleet_next.actions.refresh", side_effect=failure), \
              mock.patch("fleet_next.actions.subprocess.run") as run:
-            with self.assertRaises(subprocess.CalledProcessError):
+            with self.assertRaisesRegex(SystemExit, "actor_not_idle"):
                 actions.refresh_report("alan:newton:codex-1")
         run.assert_called_once_with([
             "tmux", "display-message", "-t", "fleet@muster",
