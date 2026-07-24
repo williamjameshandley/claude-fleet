@@ -139,17 +139,18 @@ class IdentityTests(unittest.TestCase):
             "attachment": {"kind": "none"},
         }]), [])
 
-    def test_packaged_service_and_noninteractive_cli_share_explicit_alan_socket(self):
+    def test_noninteractive_cli_uses_the_user_owned_alan_socket(self):
         root = Path(__file__).parents[1]
-        self.assertEqual((root / "alan-socket").read_text().strip(),
-                         "/run/alan-loop/loop.sock")
+        self.assertNotIn("/etc/agent-fleet/alan-socket",
+                         (root / "PKGBUILD").read_text())
         self.assertNotIn("LOOP_SOCKET=", (root / "fleet-next.service").read_text())
         with mock.patch.dict(os.environ, {}, clear=True), \
-             mock.patch("fleet_next.alan.Path.home", return_value=Path("/missing")), \
+             mock.patch("fleet_next.alan.Path.home", return_value=Path("/home/will")), \
              mock.patch("fleet_next.alan.Path.exists", return_value=True), \
              mock.patch("fleet_next.alan.Path.read_text",
-                        return_value="/run/alan-loop/loop.sock\n"):
-            self.assertEqual(alan_socket_path(), Path("/run/alan-loop/loop.sock"))
+                        return_value="/home/will/.local/state/alan/loop.sock\n"):
+            self.assertEqual(alan_socket_path(),
+                             Path("/home/will/.local/state/alan/loop.sock"))
 
     def test_watch_protocol_failure_clears_actor_rows_and_retries(self):
         actor = {"addr": "python-1", "type": "python", "state": "live",
