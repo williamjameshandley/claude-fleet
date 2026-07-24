@@ -106,6 +106,7 @@ def create():
         result = host_command(host, "fleet-next", "alan-spawn", agent, name, cwd,
                               capture_output=True)
         key = f"alan:{host}:{result.stdout.strip()}"
+        wait_for_projection(key)
     viewer.open_main(key)
 
 
@@ -186,7 +187,7 @@ def refresh_check(key, native_id):
             raise SystemExit(f"session identity changed: {key}")
 
 
-def wait_for_projection(key, native_id):
+def wait_for_projection(key, native_id=None):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
@@ -196,7 +197,7 @@ def wait_for_projection(key, native_id):
             continue
         attachment = session.attachment or {}
         if (session.ref.server.kind != "alan" or
-                (session.transcript_id == native_id and
+                ((native_id is None or session.transcript_id == native_id) and
                  attachment.get("kind") not in {None, "none"})):
             return
         time.sleep(.1)

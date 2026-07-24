@@ -243,12 +243,14 @@ class IdentityTests(unittest.TestCase):
         with mock.patch("fleet_next.actions.muster_input",
                         side_effect=[host, "codex", "analysis.", "/work"]), \
              mock.patch("fleet_next.actions.host_command") as run, \
+             mock.patch("fleet_next.actions.wait_for_projection") as wait, \
              mock.patch("fleet_next.actions.viewer.open_main") as show:
             run.return_value.stdout = "codex-deadbeef\n"
             actions.create()
         run.assert_called_once_with(
             host, "fleet-next", "alan-spawn", "codex", "analysis", "/work",
             capture_output=True)
+        wait.assert_called_once_with(f"alan:{host}:codex-deadbeef")
         show.assert_called_once_with(f"alan:{host}:codex-deadbeef")
 
     def test_create_keeps_plain_shells_as_tmux_sessions(self):
