@@ -236,6 +236,47 @@ def refresh_report(key):
         raise SystemExit(reason)
 
 
+def refresh_all():
+    sessions, _, unavailable = decode_message(snapshot())
+    failed = False
+    for session in sorted(sessions, key=lambda item: item.ref.key):
+        key = session.ref.key
+        reason = None
+        if session.ref.server.host in unavailable:
+            reason = "unavailable"
+        elif session.agent not in {"claude", "codex"}:
+            reason = f"unsupported-{session.agent}"
+        elif session.state != "waiting":
+            reason = session.state
+        elif session.windows != 1:
+            reason = f"windows-{session.windows}"
+        elif not session.transcript_id:
+            reason = "no-durable-identity"
+        if reason:
+            print(f"{key}\tskipped: {reason}")
+            continue
+        try:
+            refresh(key)
+        except (RuntimeError, subprocess.CalledProcessError, SystemExit) as error:
+            detail = (error.stderr.strip()
+                      if isinstance(error, subprocess.CalledProcessError) and error.stderr
+                      else str(error))
+            detail = " ".join(detail.split())
+            print(f"{key}\tfailed: {detail}")
+            failed = True
+        else:
+            print(f"{key}\trefreshed")
+    if failed:
+        raise SystemExit(1)
+
+
+def refresh_command(key, all_sessions):
+    if all_sessions:
+        refresh_all()
+    else:
+        refresh_report(key)
+
+
 def next_waiting_key(sessions, active):
     waiting = [session for session in sessions
                if session.attention != "done" and session.state == "waiting"]

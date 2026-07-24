@@ -8,6 +8,8 @@ import json
 import queue
 import socket
 import threading
+import contextlib
+import io
 from unittest import mock
 from pathlib import Path
 
@@ -509,6 +511,54 @@ class IdentityTests(unittest.TestCase):
         run.assert_called_once_with([
             "tmux", "display-message", "-t", "fleet@muster",
             "Refresh failed: actor_not_idle"])
+
+    def test_refresh_all_uses_one_snapshot_and_reports_every_outcome(self):
+        waiting = self.session("lovelace", "$1")
+        waiting = Session(**{**waiting.__dict__, "agent_name": "codex",
+                             "reported_state": "waiting", "transcript_id": "thread-1"})
+        working = Session(**{**self.session("newton", "$2").__dict__,
+                             "agent_name": "claude", "reported_state": "working",
+                             "transcript_id": "session-2"})
+        unsupported = Session(**{**self.session("turing", "$3").__dict__,
+                                 "agent_name": "python"})
+        remote = Session(**{**self.session("boltzmann", "$4").__dict__,
+                            "agent_name": "claude", "transcript_id": "session-4"})
+        output = io.StringIO()
+        with mock.patch("fleet_next.actions.snapshot", return_value="snapshot"), \
+             mock.patch("fleet_next.actions.decode_message",
+                        return_value=([waiting, working, unsupported, remote], {},
+                                      ["boltzmann"])), \
+             mock.patch("fleet_next.actions.refresh") as refresh, \
+             contextlib.redirect_stdout(output):
+            actions.refresh_all()
+        refresh.assert_called_once_with(waiting.ref.key)
+        self.assertEqual(output.getvalue().splitlines(), sorted([
+            f"{waiting.ref.key}\trefreshed",
+            f"{working.ref.key}\tskipped: working",
+            f"{unsupported.ref.key}\tskipped: unsupported-python",
+            f"{remote.ref.key}\tskipped: unavailable",
+        ]))
+
+    def test_refresh_all_continues_then_fails_after_eligible_failure(self):
+        first = Session(**{**self.session("lovelace", "$1").__dict__,
+                           "agent_name": "codex", "transcript_id": "thread-1"})
+        second = Session(**{**self.session("newton", "$2").__dict__,
+                            "agent_name": "claude", "transcript_id": "session-2"})
+        failure = subprocess.CalledProcessError(
+            1, ["ssh", "newton"], stderr="replacement\nfailed\tremotely\n")
+        output = io.StringIO()
+        with mock.patch("fleet_next.actions.snapshot", return_value="snapshot"), \
+             mock.patch("fleet_next.actions.decode_message",
+                        return_value=([second, first], {}, [])), \
+             mock.patch("fleet_next.actions.refresh", side_effect=[failure, None]) as refresh, \
+             contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(SystemExit, "1"):
+                actions.refresh_all()
+        self.assertEqual(refresh.call_count, 2)
+        self.assertIn(f"{first.ref.key}\tfailed: replacement failed remotely",
+                      output.getvalue())
+        self.assertIn(f"{second.ref.key}\trefreshed", output.getvalue())
+        self.assertEqual(len(output.getvalue().splitlines()), 2)
 
     def test_refresh_reopens_viewer_after_its_real_attachment_child_exits(self):
         session = self.session(os.uname().nodename)
